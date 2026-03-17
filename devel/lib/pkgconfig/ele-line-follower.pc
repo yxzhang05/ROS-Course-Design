@@ -1,0 +1,8 @@
+prefix=/home/gdut/catkin_roscar/devel
+
+Name: ele-line-follower
+Description: Description of ele-line-follower
+Version: 0.0.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 

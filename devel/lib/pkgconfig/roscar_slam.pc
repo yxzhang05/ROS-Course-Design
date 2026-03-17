@@ -1,0 +1,8 @@
+prefix=/home/gdut/catkin_roscar/devel
+
+Name: roscar_slam
+Description: Description of roscar_slam
+Version: 0.0.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 

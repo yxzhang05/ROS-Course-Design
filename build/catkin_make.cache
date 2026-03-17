@@ -1,0 +1,2 @@
+driver:ele_line_follower:orbbec_camera:robot_pose_ekf:roscar_slam:rplidar_ros:start_roscar:traffic_light_yolo:traffic_light_yolo_1:usb_cam
+-DCATKIN_DEVEL_PREFIX=/home/gdut/catkin_roscar/devel -DCMAKE_INSTALL_PREFIX=/home/gdut/catkin_roscar/install -G Unix Makefiles

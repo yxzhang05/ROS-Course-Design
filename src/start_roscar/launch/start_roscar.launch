@@ -1,0 +1,32 @@
+<launch>
+  <!-- Arguments参数 -->
+  <arg name="car_mode"  default="senior_diff" 
+       doc="opt: senior_akm,senior_mec_bs,senior_mec_dl"/>
+  <!-- 内部变量：是否重复加载，默认false -->
+  <arg name="repeat" default="false"/>
+  <arg name="is_cartographer" default="false"/>
+
+  <!-- 0. 启动STM32控制板驱动接口 -->
+  <include file="$(find driver)/launch/car_driver.launch" /> 
+
+  <!-- 1. 发布用于建图、导航的TF关系与小车外形可视化 -->
+  <include file="$(find start_roscar)/launch/robot_model_visualization.launch" unless="$(arg repeat)">
+    <arg name="car_mode" value="$(arg car_mode)"/>
+  </include>
+
+  <!-- 2. 扩张卡尔曼滤波 -->
+  <include file="$(find start_roscar)/launch/include/robot_pose_ekf.launch" unless="$(arg repeat)">
+    <arg name="is_cartographer" value="$(arg is_cartographer)"/>
+  </include>
+
+  <!-- 3. 激光雷达 RPLidar A3 -->
+  <!-- 默认雷达装在 base_link 上方，这里发布一个静态 TF（x y z yaw pitch roll） -->
+  <include file="$(find rplidar_ros)/launch/rplidar_a3.launch" />
+
+  <!-- 4. USB 摄像头 usb_cam -->
+  <!-- 默认摄像头装在前端，发布静态 TF。注意：child_frame_id 需与 usb_cam 节点参数一致 -->
+  <include file="$(find usb_cam)/launch/usb_cam-test.launch" />
+
+</launch>
+
+
