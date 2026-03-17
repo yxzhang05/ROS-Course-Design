@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>start_roscar</name>
+  <version>1.0.0</version>
+  <description>小车启动与导航包，包含底盘启动、地图、AMCL 定位、move_base 导航以及多点导航节点。</description>
+
+  <maintainer email="user@example.com">user</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <!-- Python 依赖 -->
+  <exec_depend>rospy</exec_depend>
+  <!-- 导航相关消息 -->
+  <exec_depend>actionlib</exec_depend>
+  <exec_depend>move_base_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>tf</exec_depend>
+  <!-- 导航功能包 -->
+  <exec_depend>map_server</exec_depend>
+  <exec_depend>amcl</exec_depend>
+  <exec_depend>move_base</exec_depend>
+</package>
