@@ -10,7 +10,7 @@
   1. 确保 navigation.launch 已启动（底盘、地图服务器、AMCL、move_base）。
   2. 修改下方 WAYPOINTS 列表中的坐标与偏航角，以适配实际地图中的目标点。
   3. 通过 multi_point_navigation.launch 启动本节点，或直接运行：
-       rosrun start_roscar multi_point_navigation.py
+       rosrun wulina multi_point_navigation.py
 
 参数说明（可通过 ROS 参数服务器覆盖）：
   ~loop          (bool,  默认: False)  — 是否循环执行航点列表

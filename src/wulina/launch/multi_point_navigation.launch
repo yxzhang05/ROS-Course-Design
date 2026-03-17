@@ -1,0 +1,60 @@
+<launch>
+  <!-- ============================================================ -->
+  <!-- wulina 多点导航启动文件                                        -->
+  <!--                                                              -->
+  <!-- 本文件会依次启动：                                             -->
+  <!--   1. 机器人底盘、激光雷达等硬件（start_roscar.launch）         -->
+  <!--   2. 地图服务器（roscar_map1.yaml）                           -->
+  <!--   3. AMCL 自适应蒙特卡洛定位                                   -->
+  <!--   4. move_base 路径规划与导航                                  -->
+  <!--   5. wulina 多点导航节点                                       -->
+  <!--                                                              -->
+  <!-- 使用方式：                                                    -->
+  <!--   roslaunch wulina multi_point_navigation.launch              -->
+  <!--                                                              -->
+  <!-- 可选参数（在命令行中用 key:=value 覆盖）：                     -->
+  <!--   map_file     — 地图文件路径（默认：roscar_map1.yaml）        -->
+  <!--   loop         — 是否循环巡逻（true/false，默认：false）       -->
+  <!--   loop_count   — 循环次数（loop=true 时有效，0=无限，默认：1）  -->
+  <!--   goal_timeout — 单个目标超时秒数（默认：60）                  -->
+  <!-- ============================================================ -->
+
+  <!-- ===================== -->
+  <!-- 1. 导航基础栈           -->
+  <!--    复用 start_roscar 包中已有的 navigation.launch            -->
+  <!--    该文件会启动：底盘驱动、TF、EKF、激光雷达、地图、AMCL、    -->
+  <!--    move_base（全局规划 + TEB 局部规划）                       -->
+  <!-- ===================== -->
+  <!-- 地图文件，默认使用已建好的 roscar_map1.yaml -->
+  <arg name="map_file" default="$(find start_roscar)/map/roscar_map1.yaml"/>
+  <include file="$(find start_roscar)/launch/navigation.launch">
+    <arg name="map_file" value="$(arg map_file)"/>
+  </include>
+
+  <!-- ===================== -->
+  <!-- 2. 多点导航节点参数    -->
+  <!-- ===================== -->
+  <!-- 是否循环执行所有航点（true = 循环，false = 执行一轮后退出） -->
+  <arg name="loop"         default="false"/>
+  <!-- 循环次数（仅 loop=true 时有效；0 表示无限循环） -->
+  <arg name="loop_count"   default="1"/>
+  <!-- 单个目标的最长等待时间（秒） -->
+  <arg name="goal_timeout" default="60.0"/>
+
+  <!-- ===================== -->
+  <!-- 3. 启动多点导航节点    -->
+  <!--    脚本路径：wulina/scripts/multi_point_navigation.py        -->
+  <!-- ===================== -->
+  <node pkg="wulina" type="multi_point_navigation.py"
+        name="multi_point_navigation" output="screen">
+    <!-- 是否循环导航 -->
+    <param name="loop"         value="$(arg loop)"/>
+    <!-- 循环次数 -->
+    <param name="loop_count"   value="$(arg loop_count)"/>
+    <!-- 单目标超时（秒） -->
+    <param name="goal_timeout" value="$(arg goal_timeout)"/>
+    <!-- 导航坐标系（与建图时使用的 map frame 保持一致） -->
+    <param name="map_frame"    value="map"/>
+  </node>
+
+</launch>

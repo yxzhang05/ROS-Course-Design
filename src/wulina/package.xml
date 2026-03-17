@@ -1,23 +1,24 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>start_roscar</name>
+  <name>wulina</name>
   <version>1.0.0</version>
-  <description>小车启动与导航配置包，包含地图、AMCL、move_base 等 launch 文件和参数。</description>
+  <description>
+    wulina 功能包：存放课程设计中新增的 ROS 节点，目前包含多点自主导航节点。
+  </description>
 
   <maintainer email="user@example.com">user</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>catkin</buildtool_depend>
 
-  <!-- Python 依赖 -->
+  <!-- Python 运行时 -->
   <exec_depend>rospy</exec_depend>
-  <!-- 导航相关消息 -->
+  <!-- 导航动作库 -->
   <exec_depend>actionlib</exec_depend>
+  <!-- move_base 动作消息 -->
   <exec_depend>move_base_msgs</exec_depend>
+  <!-- 位姿/几何消息 -->
   <exec_depend>geometry_msgs</exec_depend>
+  <!-- 坐标变换（四元数计算） -->
   <exec_depend>tf</exec_depend>
-  <!-- 导航功能包 -->
-  <exec_depend>map_server</exec_depend>
-  <exec_depend>amcl</exec_depend>
-  <exec_depend>move_base</exec_depend>
 </package>
