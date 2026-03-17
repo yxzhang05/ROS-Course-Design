@@ -132,14 +132,15 @@ def _read_float(prompt_text, default):
             sys.stdout.flush()
 
 
-def interactive_prompt(next_wp, next_idx, total):
+def interactive_prompt(next_wp, next_idx, total, label='下一个航点'):
     """
-    到达当前航点后，在终端显示下一个航点信息并询问用户如何操作。
+    在终端显示指定航点的信息并询问用户如何操作。
 
     参数:
-        next_wp   (dict): 下一个航点的字典（含 'name'、'x'、'y'、'yaw'）
-        next_idx  (int):  下一个航点在列表中的序号（1-based）
+        next_wp   (dict): 航点字典（含 'name'、'x'、'y'、'yaw'）
+        next_idx  (int):  航点在列表中的序号（1-based）
         total     (int):  航点总数
+        label     (str):  显示在标题行的标签，如"起始航点"或"下一个航点"
 
     返回:
         tuple(dict, bool):
@@ -150,13 +151,13 @@ def interactive_prompt(next_wp, next_idx, total):
 
     sep = '─' * 60
     sys.stdout.write('\n{}\n'.format(sep))
-    sys.stdout.write('【下一个航点】  {}/{}  —  {}\n'.format(
-        next_idx, total, wp.get('name', '未命名')))
+    sys.stdout.write('【{}】  {}/{}  —  {}\n'.format(
+        label, next_idx, total, wp.get('name', '未命名')))
     sys.stdout.write('  坐标：x = {:.4f}  y = {:.4f}  yaw = {:.4f} rad\n'.format(
         wp['x'], wp['y'], wp['yaw']))
     sys.stdout.write('\n请选择操作：\n')
-    sys.stdout.write('  [y / 回车]  继续前往下一个航点\n')
-    sys.stdout.write('  [m]         临时修改下一个航点坐标后继续\n')
+    sys.stdout.write('  [y / 回车]  继续前往该航点\n')
+    sys.stdout.write('  [m]         临时修改该航点坐标后继续\n')
     sys.stdout.write('  [n]         停止导航，退出节点\n')
     sys.stdout.write('{}\n'.format(sep))
     sys.stdout.flush()
@@ -202,8 +203,9 @@ def navigate_to_waypoints(client, waypoints, map_frame, goal_timeout,
                            interactive=True):
     """
     按顺序导航到航点列表中的每个目标点。
-    当 interactive=True 时，每到达一个航点（最后一个除外），
-    会在终端显示下一个航点信息并等待用户指令。
+    当 interactive=True 时：
+      - 执行第一个航点前，先在终端显示起始航点坐标并等待用户确认/修改/停止。
+      - 每到达一个航点（最后一个除外），在终端显示下一个航点信息并等待用户指令。
 
     参数:
         client       (SimpleActionClient): move_base 动作客户端
@@ -217,9 +219,18 @@ def navigate_to_waypoints(client, waypoints, map_frame, goal_timeout,
     """
     total = len(waypoints)
 
-    # 将原始列表复制一份，以便交互模式下可对下一个航点临时修改而不影响原列表
+    # 将原始列表复制一份，以便交互模式下可对航点临时修改而不影响原列表
     pending = [dict(wp) for wp in waypoints]
     idx = 0
+
+    # 交互模式：在执行第一个航点前先询问用户
+    if interactive and total > 0:
+        first_wp, should_continue = interactive_prompt(
+            pending[0], 1, total, label='起始航点')
+        if not should_continue:
+            rospy.loginfo('用户选择停止，导航未启动。')
+            return False
+        pending[0] = first_wp
 
     while idx < total:
         # 检查节点是否已被关闭
