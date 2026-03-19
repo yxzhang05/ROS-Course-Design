@@ -172,3 +172,7 @@ roslaunch wulina multi_point_navigation.launch
 - 多点导航脚本执行逻辑详解
 - 三类已知问题的根因分析与解决方案
 - 调参建议与诊断命令速查
+
+如需专项解决**小车无故后退**及**路径非最短**问题，请参阅：
+
+👉 **[docs/param_tuning_no_reverse.md](docs/param_tuning_no_reverse.md)**

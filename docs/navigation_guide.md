@@ -572,3 +572,9 @@ rostopic echo /odom -n 1
 # 强制清除代价地图（机器人被困时有用）
 rosservice call /move_base/clear_costmaps
 ```
+
+---
+
+> 针对**多点导航时小车无故后退**以及**路径非最短**的专项调参说明，请参阅：
+>
+> 👉 **[param_tuning_no_reverse.md](param_tuning_no_reverse.md)**
