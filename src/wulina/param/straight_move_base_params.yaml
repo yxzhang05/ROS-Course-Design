@@ -1,0 +1,59 @@
+# move_base 参数（直线导航专用版）
+# =====================================================================
+# 本文件是 start_roscar/param/move_base_params.yaml 的配套版本，
+# 供直线导航 fallback 场景（遇到障碍物时切换给 move_base 绕障）使用。
+# 主要改动：
+#   - planner_frequency 提高到 2.0 Hz，加快障碍物感知响应
+#   - recovery_behavior_enabled 保持 false（与原始一致）
+# 其余参数与原始文件保持一致。
+# =====================================================================
+
+# 全局路径规划器：使用 Dijkstra 算法的 GlobalPlanner
+base_global_planner: "global_planner/GlobalPlanner"
+
+# 局部路径规划器：使用改进版 TEB 参数（straight_teb_params.yaml）
+base_local_planner: "teb_local_planner/TebLocalPlannerROS"
+
+# 控制频率 (Hz)
+controller_frequency: 20.0
+
+# 全局规划频率 (Hz)：设为 2.0 以加快对障碍物变化的响应
+planner_frequency: 2.0
+
+transform_tolerance: 1.0
+
+# 规划失败后重试次数
+max_planning_retries: 1
+
+# 不活动时关闭代价地图更新
+shutdown_costmaps: false
+
+# 恢复行为配置（与原始保持一致，仅在异常时使用）
+recovery_behaviors:
+  - name: 'recovery_behavior_1'
+    type: 'clear_costmap_recovery/ClearCostmapRecovery'
+  - name: 'recovery_behavior_2'
+    type: 'rotate_recovery/RotateRecovery'
+  - name: 'recovery_behavior_3'
+    type: 'move_slow_and_clear/MoveSlowAndClear'
+
+recovery_behavior_enabled: false
+clearing_rotation_allowed: false
+conservative_reset_dist: 3.0
+
+planner_patience: 3.0
+controller_patience: 3.0
+
+oscillation_distance: 0.02
+oscillation_timeout: 10.0
+
+recovery_behavior_1:
+  reset_distance: 1.0
+recovery_behavior_2:
+  reset_distance: 3.0
+recovery_behavior_3:
+  clearing_distance: 5.0
+  limited_trans_speed: 0.1
+  limited_rot_speed: 0.4
+  limited_distance: 0.3
+  planner_namespace: TebLocalPlannerROS
