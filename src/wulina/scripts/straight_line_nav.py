@@ -37,6 +37,12 @@
   ~amcl_wait_timeout         (float, 默认 30.0)   — 等待 AMCL 就绪最长时间（秒）
   ~map_rotation_offset       (float, 默认 0.0)    — 导航坐标系相对地图坐标系的
                                                      逆时针旋转角（弧度）
+  ~map_translation_offset_x  (float, 默认 0.0)    — 坐标变换后叠加的 X 轴平移量（米）；
+                                                     地图 origin 由 [ox_old,oy_old,θ_old]
+                                                     改为 [ox_new,oy_new,θ_new] 时：
+                                                     tx = ox_new - ox_old*cos(θ_new) + oy_old*sin(θ_new)
+  ~map_translation_offset_y  (float, 默认 0.0)    — 坐标变换后叠加的 Y 轴平移量（米）；
+                                                     ty = oy_new - ox_old*sin(θ_new) - oy_old*cos(θ_new)
 """
 
 import math
@@ -91,15 +97,21 @@ def _angle_diff(target, current):
     return (target - current + math.pi) % (2.0 * math.pi) - math.pi
 
 
-def _transform_waypoint(wp, rotation_offset):
-    """将航点从导航坐标系旋转变换到地图坐标系。"""
-    if rotation_offset == 0.0:
+def _transform_waypoint(wp, rotation_offset,
+                        translation_x=0.0, translation_y=0.0):
+    """将航点从导航坐标系变换到地图坐标系（旋转 + 平移）。
+
+    x_map = x_nav * cos(offset) - y_nav * sin(offset) + translation_x
+    y_map = x_nav * sin(offset) + y_nav * cos(offset) + translation_y
+    yaw_map = yaw_nav + offset
+    """
+    if rotation_offset == 0.0 and translation_x == 0.0 and translation_y == 0.0:
         return wp
     c = math.cos(rotation_offset)
     s = math.sin(rotation_offset)
     transformed = dict(wp)
-    transformed['x']   = wp['x'] * c - wp['y'] * s
-    transformed['y']   = wp['x'] * s + wp['y'] * c
+    transformed['x']   = wp['x'] * c - wp['y'] * s + translation_x
+    transformed['y']   = wp['x'] * s + wp['y'] * c + translation_y
     transformed['yaw'] = wp['yaw'] + rotation_offset
     return transformed
 
@@ -212,6 +224,8 @@ class StraightLineNavigator:
         self.initial_pose_a    = rospy.get_param('~initial_pose_a', 0.0)
         self.amcl_wait_timeout = rospy.get_param('~amcl_wait_timeout', 30.0)
         self.rotation_offset   = rospy.get_param('~map_rotation_offset', 0.0)
+        self.translation_x     = rospy.get_param('~map_translation_offset_x', 0.0)
+        self.translation_y     = rospy.get_param('~map_translation_offset_y', 0.0)
 
         # ── 话题发布者 & TF ───────────────────────────────────────────
         self.cmd_vel_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=1)
@@ -620,8 +634,9 @@ class StraightLineNavigator:
                           wp['x'], wp['y'], wp['yaw'])
 
             # 坐标变换到地图坐标系
-            wp_map = _transform_waypoint(wp, self.rotation_offset)
-            if self.rotation_offset != 0.0:
+            wp_map = _transform_waypoint(wp, self.rotation_offset,
+                                         self.translation_x, self.translation_y)
+            if self.rotation_offset != 0.0 or self.translation_x != 0.0 or self.translation_y != 0.0:
                 rospy.loginfo('  坐标（地图系）：x=%.4f  y=%.4f  yaw=%.4f rad',
                               wp_map['x'], wp_map['y'], wp_map['yaw'])
 

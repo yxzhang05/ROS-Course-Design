@@ -35,8 +35,10 @@
   <!--   set_initial_pose  — 是否自动发布初始位姿（默认：false）     -->
   <!--   initial_pose_x/y/a — 初始位姿（set_initial_pose=true 时）  -->
   <!--   amcl_wait_timeout — 等待 AMCL 就绪最长秒数（默认：30）     -->
-  <!--   map_rotation_offset — 导航坐标系相对地图坐标系逆时针偏角   -->
-  <!--                         （弧度，默认：0）                    -->
+  <!--   map_rotation_offset — 导航坐标系相对地图坐标系逆时针偏角                   -->
+  <!--                         默认 -0.90，对应地图 origin 改为 [-140.421,16.5,-0.90] -->
+  <!--   map_translation_offset_x — 坐标变换后叠加的 X 轴平移量（米，默认 0.073）   -->
+  <!--   map_translation_offset_y — 坐标变换后叠加的 Y 轴平移量（米，默认 0.328）   -->
   <!-- ============================================================ -->
 
   <!-- ── 1. 导航基础栈（复用原有 start_roscar.launch + AMCL）────── -->
@@ -99,7 +101,11 @@
   <arg name="initial_pose_y"            default="0.0"/>
   <arg name="initial_pose_a"            default="0.0"/>
   <arg name="amcl_wait_timeout"         default="30.0"/>
-  <arg name="map_rotation_offset"       default="0.0"/>
+  <arg name="map_rotation_offset"       default="-0.90"/>
+  <!-- 坐标系平移偏差（米），解决地图 origin 改变引起的位置偏差问题 -->
+  <!-- 由 [-100,-100,0] → [-140.421,16.5,-0.90] 计算得 tx≈0.073, ty≈0.328  -->
+  <arg name="map_translation_offset_x" default="0.073"/>
+  <arg name="map_translation_offset_y" default="0.328"/>
 
   <!-- ── 4. 启动直线导航节点 ───────────────────────────────────── -->
   <node pkg="wulina" type="straight_line_nav.py"
@@ -123,6 +129,8 @@
     <param name="initial_pose_a"            value="$(arg initial_pose_a)"/>
     <param name="amcl_wait_timeout"         value="$(arg amcl_wait_timeout)"/>
     <param name="map_rotation_offset"       value="$(arg map_rotation_offset)"/>
+    <param name="map_translation_offset_x"  value="$(arg map_translation_offset_x)"/>
+    <param name="map_translation_offset_y"  value="$(arg map_translation_offset_y)"/>
   </node>
 
 </launch>

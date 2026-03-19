@@ -57,10 +57,10 @@
   坐标系 X 轴方向存在固定角度偏差。若直接使用地图坐标系的坐标填写航点，
   所有目标点的方向都会产生系统性偏差。
   解决方案：新增 map_rotation_offset 参数（弧度），表示导航（用户）坐标系
-  相对地图坐标系的逆时针旋转角度。节点在将航点发送给 move_base 前，
-  自动完成坐标变换：
-    x_map = x_nav * cos(offset) - y_nav * sin(offset)
-    y_map = x_nav * sin(offset) + y_nav * cos(offset)
+  相对地图坐标系的逆时针旋转角度，以及 map_translation_offset_x/y 参数（米），
+  用于补偿地图 origin 改变引起的平移偏差。节点在发送航点前自动完成变换：
+    x_map = x_nav * cos(offset) - y_nav * sin(offset) + translation_x
+    y_map = x_nav * sin(offset) + y_nav * cos(offset) + translation_y
     yaw_map = yaw_nav + offset
   这样用户只需在自己习惯的坐标系中填写航点，节点负责转换为地图坐标系。
 
@@ -81,8 +81,11 @@
   ~amcl_wait_timeout         (float, 默认: 30.0)  — 等待 AMCL 就绪的最长时间（秒）；
                                                      设为 ≤0 跳过等待
   ~map_rotation_offset       (float, 默认: 0.0)   — 导航坐标系相对地图坐标系的逆时针
-                                                     旋转角（弧度）；例如 π/4 ≈ 0.7854
-                                                     表示导航坐标系比地图坐标系偏转 45°
+                                                     旋转角（弧度）；例如 -0.90 表示
+                                                     地图坐标系顺时针偏转 0.90 rad
+  ~map_translation_offset_x  (float, 默认: 0.0)   — 坐标变换后叠加的 X 轴平移量（米）；
+                                                     当地图 origin 改变时用于补偿平移偏差
+  ~map_translation_offset_y  (float, 默认: 0.0)   — 坐标变换后叠加的 Y 轴平移量（米）
 """
 
 import math
@@ -166,37 +169,46 @@ def build_goal(waypoint, map_frame):
     return goal
 
 
-def _transform_waypoint(wp, rotation_offset):
+def _transform_waypoint(wp, rotation_offset,
+                        translation_x=0.0, translation_y=0.0):
     """
     将航点坐标从导航（用户）坐标系变换到地图坐标系（map frame）。
 
-    当导航坐标系相对建图时的 map 坐标系存在逆时针旋转偏差时，必须在把
-    目标发送给 move_base 前完成坐标变换，否则实际导航目标会出现方向性偏差。
+    当导航坐标系相对建图时的 map 坐标系存在旋转或平移偏差时，必须在把
+    目标发送给 move_base 前完成坐标变换，否则实际导航目标会出现偏差。
 
     变换原理（导航坐标系 → 地图坐标系）：
-      设 offset = 导航坐标系相对地图坐标系的逆时针旋转角（rad），
-      即导航坐标系的 X 轴在地图坐标系中的方向为 (cos offset, sin offset)，
+      设 offset        = 导航坐标系相对地图坐标系的逆时针旋转角（rad），
+         translation_x = 旋转后叠加的 X 轴平移量（米），
+         translation_y = 旋转后叠加的 Y 轴平移量（米），
       则点 (x_nav, y_nav) 在地图坐标系中的坐标为：
 
-        x_map = x_nav * cos(offset) - y_nav * sin(offset)
-        y_map = x_nav * sin(offset) + y_nav * cos(offset)
+        x_map = x_nav * cos(offset) - y_nav * sin(offset) + translation_x
+        y_map = x_nav * sin(offset) + y_nav * cos(offset) + translation_y
         yaw_map = yaw_nav + offset
+
+    当地图的 origin 参数从 [ox_old, oy_old, θ_old] 改为 [ox_new, oy_new, θ_new] 时，
+    可用以下公式计算等效平移量（rotation_offset = θ_new − θ_old）：
+        translation_x = ox_new − ox_old * cos(θ_new) + oy_old * sin(θ_new)
+        translation_y = oy_new − ox_old * sin(θ_new) − oy_old * cos(θ_new)
 
     参数:
         wp              (dict):  原始航点字典（含 'x'、'y'、'yaw' 及其他键）
         rotation_offset (float): 导航坐标系相对地图坐标系的逆时针偏角（弧度）
+        translation_x   (float): 旋转后的 X 轴平移量（米，默认 0.0）
+        translation_y   (float): 旋转后的 Y 轴平移量（米，默认 0.0）
 
     返回:
         dict: 地图坐标系下的航点字典（非坐标键原样保留）
     """
-    if rotation_offset == 0.0:
-        return wp  # 无旋转偏差，无需变换
+    if rotation_offset == 0.0 and translation_x == 0.0 and translation_y == 0.0:
+        return wp  # 无偏差，无需变换
 
     c = math.cos(rotation_offset)
     s = math.sin(rotation_offset)
     transformed = dict(wp)
-    transformed['x']   = wp['x'] * c - wp['y'] * s
-    transformed['y']   = wp['x'] * s + wp['y'] * c
+    transformed['x']   = wp['x'] * c - wp['y'] * s + translation_x
+    transformed['y']   = wp['x'] * s + wp['y'] * c + translation_y
     transformed['yaw'] = wp['yaw'] + rotation_offset
     return transformed
 
@@ -459,7 +471,8 @@ def navigate_to_waypoints(client, waypoints, map_frame, goal_timeout,
                            base_frame='base_footprint',
                            angular_speed=0.3, yaw_tolerance=0.05,
                            initial_pose_x=0.0, initial_pose_y=0.0,
-                           rotation_offset=0.0):
+                           rotation_offset=0.0,
+                           translation_x=0.0, translation_y=0.0):
     """
     按顺序导航到航点列表中的每个目标点。
     当 interactive=True 时：
@@ -487,6 +500,8 @@ def navigate_to_waypoints(client, waypoints, map_frame, goal_timeout,
         initial_pose_x           (float):              初始位置 X（米，地图坐标系），用于首航点距离判断
         initial_pose_y           (float):              初始位置 Y（米，地图坐标系）
         rotation_offset          (float):              导航坐标系相对地图坐标系的逆时针偏角（rad）
+        translation_x            (float):              旋转后叠加的 X 轴平移量（米，默认 0.0）
+        translation_y            (float):              旋转后叠加的 Y 轴平移量（米，默认 0.0）
 
     返回:
         bool: 所有航点均成功到达时返回 True，否则返回 False
@@ -524,8 +539,8 @@ def navigate_to_waypoints(client, waypoints, map_frame, goal_timeout,
                       wp['x'], wp['y'], wp['yaw'])
 
         # 将航点从导航坐标系变换到地图坐标系（move_base 使用地图坐标系）
-        wp_map = _transform_waypoint(wp, rotation_offset)
-        if rotation_offset != 0.0:
+        wp_map = _transform_waypoint(wp, rotation_offset, translation_x, translation_y)
+        if rotation_offset != 0.0 or translation_x != 0.0 or translation_y != 0.0:
             rospy.loginfo('  目标坐标（地图坐标系）：x=%.4f  y=%.4f  yaw=%.4f rad',
                           wp_map['x'], wp_map['y'], wp_map['yaw'])
 
@@ -639,6 +654,16 @@ def main():
     # 例：地图偏差 45°（π/4 ≈ 0.7854），则设为 0.7854
     map_rotation_offset = rospy.get_param('~map_rotation_offset', 0.0)
 
+    # 坐标系平移偏差（解决地图 origin 参数改变后的位置偏差问题）
+    # 当地图 origin 的旋转角由 θ_old 改为 θ_new 时，需要同时配置平移偏差：
+    #   map_translation_offset_x = ox_new − ox_old*cos(θ_new) + oy_old*sin(θ_new)
+    #   map_translation_offset_y = oy_new − ox_old*sin(θ_new) − oy_old*cos(θ_new)
+    # 本项目地图 origin 由 [-100,-100,0] 改为 [-140.421,16.5,-0.90] 时，精确值为：
+    #   tx = -140.421 - (-100)*cos(-0.90) + (-100)*sin(-0.90) ≈ 0.073
+    #   ty =    16.5  - (-100)*sin(-0.90) - (-100)*cos(-0.90) ≈ 0.328
+    map_translation_offset_x = rospy.get_param('~map_translation_offset_x', 0.0)
+    map_translation_offset_y = rospy.get_param('~map_translation_offset_y', 0.0)
+
     rospy.loginfo('=' * 50)
     rospy.loginfo('多点导航节点已启动')
     rospy.loginfo('  航点数量    : %d', len(WAYPOINTS))
@@ -654,6 +679,9 @@ def main():
     if map_rotation_offset != 0.0:
         rospy.loginfo('  坐标旋转偏差: %.4f rad（%.2f°，导航坐标系相对地图逆时针偏转）',
                       map_rotation_offset, math.degrees(map_rotation_offset))
+    if map_translation_offset_x != 0.0 or map_translation_offset_y != 0.0:
+        rospy.loginfo('  坐标平移偏差: x=%.4f m  y=%.4f m',
+                      map_translation_offset_x, map_translation_offset_y)
     if set_initial_pose:
         rospy.loginfo('  初始位姿    : x=%.4f  y=%.4f  yaw=%.4f rad',
                       initial_pose_x, initial_pose_y, initial_pose_a)
@@ -730,7 +758,9 @@ def main():
             yaw_tolerance=yaw_tolerance,
             initial_pose_x=initial_pose_x,
             initial_pose_y=initial_pose_y,
-            rotation_offset=map_rotation_offset)
+            rotation_offset=map_rotation_offset,
+            translation_x=map_translation_offset_x,
+            translation_y=map_translation_offset_y)
 
         if not success:
             rospy.logwarn('本轮导航未能完成所有航点，节点退出。')
