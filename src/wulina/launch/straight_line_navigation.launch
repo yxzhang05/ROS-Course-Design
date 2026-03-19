@@ -36,9 +36,11 @@
   <!--   initial_pose_x/y/a — 初始位姿（set_initial_pose=true 时）  -->
   <!--   amcl_wait_timeout — 等待 AMCL 就绪最长秒数（默认：30）     -->
   <!--   map_rotation_offset — 导航坐标系相对地图坐标系逆时针偏角                   -->
-  <!--                         默认 -0.90，对应地图 origin 改为 [-140.421,16.5,-0.90] -->
-  <!--   map_translation_offset_x — 坐标变换后叠加的 X 轴平移量（米，默认 0.073）   -->
-  <!--   map_translation_offset_y — 坐标变换后叠加的 Y 轴平移量（米，默认 0.328）   -->
+  <!--                         修正 base_to_laser TF 后重建地图，默认 0。           -->
+  <!--                         如临时使用旧偏斜地图，可在命令行传入 -0.90。         -->
+  <!--   map_translation_offset_x — 坐标变换后叠加的 X 轴平移量（米，默认 0）       -->
+  <!--                              如临时使用旧偏斜地图，可传入 0.073。             -->
+  <!--   map_translation_offset_y — 坐标变换后叠加的 Y 轴平移量（米，默认 0）       -->
   <!-- ============================================================ -->
 
   <!-- ── 1. 导航基础栈（复用原有 start_roscar.launch + AMCL）────── -->
@@ -101,11 +103,15 @@
   <arg name="initial_pose_y"            default="0.0"/>
   <arg name="initial_pose_a"            default="0.0"/>
   <arg name="amcl_wait_timeout"         default="30.0"/>
-  <arg name="map_rotation_offset"       default="-0.90"/>
-  <!-- 坐标系平移偏差（米），解决地图 origin 改变引起的位置偏差问题 -->
-  <!-- 由 [-100,-100,0] → [-140.421,16.5,-0.90] 计算得 tx≈0.073, ty≈0.328  -->
-  <arg name="map_translation_offset_x" default="0.073"/>
-  <arg name="map_translation_offset_y" default="0.328"/>
+  <!-- 坐标系旋转偏差（弧度）                                                        -->
+  <!-- robot_model_visualization.launch 已修正 base_to_laser TF（yaw +π/4），        -->
+  <!-- 重建地图后两坐标系完全对齐，保持默认 0.0 即可。                               -->
+  <!-- 注意：若尚未重建地图，仍在使用旧偏斜地图，请传入 map_rotation_offset:=-0.90  -->
+  <!--       以及 map_translation_offset_x:=0.073 map_translation_offset_y:=0.328。 -->
+  <arg name="map_rotation_offset"       default="0.0"/>
+  <!-- 坐标系平移偏差（米）：重建地图后不需要；旧地图临时使用请见上方注释。         -->
+  <arg name="map_translation_offset_x" default="0.0"/>
+  <arg name="map_translation_offset_y" default="0.0"/>
 
   <!-- ── 4. 启动直线导航节点 ───────────────────────────────────── -->
   <node pkg="wulina" type="straight_line_nav.py"
