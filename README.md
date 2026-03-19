@@ -80,6 +80,7 @@ roslaunch wulina multi_point_navigation.launch
 | `initial_pose_y` | 初始位姿 Y（米） | `0.0` |
 | `initial_pose_a` | 初始偏航角（弧度） | `0.0` |
 | `amcl_wait_timeout` | 等待 AMCL 就绪的最长时间（秒），设为 `≤0` 跳过等待 | `30.0` |
+| `map_rotation_offset` | 导航坐标系相对地图坐标系的逆时针偏角（弧度）；例：地图偏差 45° 则设为 `0.7854` | `0.0` |
 
 示例——循环巡逻（无限次）：
 
@@ -99,6 +100,12 @@ roslaunch wulina multi_point_navigation.launch \
 ```bash
 roslaunch wulina multi_point_navigation.launch \
   set_initial_pose:=true initial_pose_x:=1.23 initial_pose_y:=0.45 initial_pose_a:=0.785
+```
+
+示例——地图存在 45° 角度偏差时（导航坐标系逆时针偏转 45°）：
+
+```bash
+roslaunch wulina multi_point_navigation.launch map_rotation_offset:=0.7854
 ```
 
 ### 方式二：导航栈已运行时单独启动节点

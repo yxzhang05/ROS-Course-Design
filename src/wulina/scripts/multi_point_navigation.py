@@ -52,6 +52,18 @@
        机器人的真实位置（map→base_footprint），若 TF 查询失败则退化为
        使用目标坐标，保证旋转阈值判断的准确性。
 
+【问题4】地图存在角度偏差，需要导航坐标系相对建图坐标系旋转
+  原因：建图时机器人的初始朝向（即地图坐标系的 X 轴方向）与期望的导航
+  坐标系 X 轴方向存在固定角度偏差。若直接使用地图坐标系的坐标填写航点，
+  所有目标点的方向都会产生系统性偏差。
+  解决方案：新增 map_rotation_offset 参数（弧度），表示导航（用户）坐标系
+  相对地图坐标系的逆时针旋转角度。节点在将航点发送给 move_base 前，
+  自动完成坐标变换：
+    x_map = x_nav * cos(offset) - y_nav * sin(offset)
+    y_map = x_nav * sin(offset) + y_nav * cos(offset)
+    yaw_map = yaw_nav + offset
+  这样用户只需在自己习惯的坐标系中填写航点，节点负责转换为地图坐标系。
+
 参数说明（可通过 ROS 参数服务器或 launch 文件覆盖）：
   ~loop                      (bool,  默认: False) — 是否循环执行航点列表
   ~loop_count                (int,   默认: 1)     — 循环次数（loop=False 时忽略）；0=无限
@@ -63,11 +75,14 @@
   ~angular_speed             (float, 默认: 0.3)   — 原地旋转角速度（rad/s）
   ~yaw_tolerance             (float, 默认: 0.05)  — 原地旋转角度容差（rad）
   ~set_initial_pose          (bool,  默认: False) — 启动时是否向 AMCL 发布初始位姿
-  ~initial_pose_x            (float, 默认: 0.0)   — 初始位姿 X（米）
-  ~initial_pose_y            (float, 默认: 0.0)   — 初始位姿 Y（米）
-  ~initial_pose_a            (float, 默认: 0.0)   — 初始位姿偏航角（弧度）
+  ~initial_pose_x            (float, 默认: 0.0)   — 初始位姿 X（米，地图坐标系）
+  ~initial_pose_y            (float, 默认: 0.0)   — 初始位姿 Y（米，地图坐标系）
+  ~initial_pose_a            (float, 默认: 0.0)   — 初始位姿偏航角（弧度，地图坐标系）
   ~amcl_wait_timeout         (float, 默认: 30.0)  — 等待 AMCL 就绪的最长时间（秒）；
                                                      设为 ≤0 跳过等待
+  ~map_rotation_offset       (float, 默认: 0.0)   — 导航坐标系相对地图坐标系的逆时针
+                                                     旋转角（弧度）；例如 π/4 ≈ 0.7854
+                                                     表示导航坐标系比地图坐标系偏转 45°
 """
 
 import math
@@ -84,10 +99,16 @@ from tf.transformations import euler_from_quaternion, quaternion_from_euler
 #  ★ 航点配置区域 ★
 #  格式说明：
 #    'name' : 航点名称（仅用于日志显示）
-#    'x'    : 目标点在地图坐标系下的 X 坐标（米）
-#    'y'    : 目标点在地图坐标系下的 Y 坐标（米）
-#    'yaw'  : 到达目标点后的偏航角（弧度）
-#             正值 = 逆时针，负值 = 顺时针；0 = X 轴正方向
+#    'x'    : 目标点在导航坐标系下的 X 坐标（米）
+#    'y'    : 目标点在导航坐标系下的 Y 坐标（米）
+#    'yaw'  : 到达目标点后的偏航角（弧度），相对于导航坐标系
+#             正值 = 逆时针，负值 = 顺时针；0 = 导航坐标系 X 轴正方向
+#
+#  导航坐标系说明：
+#    当 map_rotation_offset = 0（默认）时，导航坐标系 = 地图坐标系（map frame），
+#    坐标直接来自 RViz 2D Nav Goal 工具。
+#    当 map_rotation_offset ≠ 0 时，导航坐标系相对地图坐标系逆时针旋转该角度，
+#    节点启动时会自动将坐标转换到地图坐标系后再发送给 move_base。
 #
 #  以下坐标由 RViz 2D Nav Goal 工具采集，已换算为 yaw 角。
 # ==============================================================================
@@ -143,6 +164,41 @@ def build_goal(waypoint, map_frame):
     goal.target_pose.pose.orientation = Quaternion(*q)
 
     return goal
+
+
+def _transform_waypoint(wp, rotation_offset):
+    """
+    将航点坐标从导航（用户）坐标系变换到地图坐标系（map frame）。
+
+    当导航坐标系相对建图时的 map 坐标系存在逆时针旋转偏差时，必须在把
+    目标发送给 move_base 前完成坐标变换，否则实际导航目标会出现方向性偏差。
+
+    变换原理（导航坐标系 → 地图坐标系）：
+      设 offset = 导航坐标系相对地图坐标系的逆时针旋转角（rad），
+      即导航坐标系的 X 轴在地图坐标系中的方向为 (cos offset, sin offset)，
+      则点 (x_nav, y_nav) 在地图坐标系中的坐标为：
+
+        x_map = x_nav * cos(offset) - y_nav * sin(offset)
+        y_map = x_nav * sin(offset) + y_nav * cos(offset)
+        yaw_map = yaw_nav + offset
+
+    参数:
+        wp              (dict):  原始航点字典（含 'x'、'y'、'yaw' 及其他键）
+        rotation_offset (float): 导航坐标系相对地图坐标系的逆时针偏角（弧度）
+
+    返回:
+        dict: 地图坐标系下的航点字典（非坐标键原样保留）
+    """
+    if rotation_offset == 0.0:
+        return wp  # 无旋转偏差，无需变换
+
+    c = math.cos(rotation_offset)
+    s = math.sin(rotation_offset)
+    transformed = dict(wp)
+    transformed['x']   = wp['x'] * c - wp['y'] * s
+    transformed['y']   = wp['x'] * s + wp['y'] * c
+    transformed['yaw'] = wp['yaw'] + rotation_offset
+    return transformed
 
 
 # ------------------------------------------------------------------------------
@@ -402,7 +458,8 @@ def navigate_to_waypoints(client, waypoints, map_frame, goal_timeout,
                            rotate_in_place_threshold=0.05,
                            base_frame='base_footprint',
                            angular_speed=0.3, yaw_tolerance=0.05,
-                           initial_pose_x=0.0, initial_pose_y=0.0):
+                           initial_pose_x=0.0, initial_pose_y=0.0,
+                           rotation_offset=0.0):
     """
     按顺序导航到航点列表中的每个目标点。
     当 interactive=True 时：
@@ -412,9 +469,12 @@ def navigate_to_waypoints(client, waypoints, map_frame, goal_timeout,
     当相邻两个航点的 XY 距离小于 rotate_in_place_threshold 时，
     使用原地旋转代替 move_base，避免位置修正引入的 XY 漂移。
 
+    当 rotation_offset ≠ 0.0 时，所有航点坐标在发送给 move_base 之前会先
+    通过 _transform_waypoint() 从导航坐标系变换到地图坐标系。
+
     参数:
         client                   (SimpleActionClient): move_base 动作客户端
-        waypoints                (list):               航点字典列表
+        waypoints                (list):               航点字典列表（导航坐标系）
         map_frame                (str):                目标坐标系名称
         goal_timeout             (float):              单个目标的超时时间（秒）
         interactive              (bool):               是否启用交互式终端控制
@@ -424,8 +484,9 @@ def navigate_to_waypoints(client, waypoints, map_frame, goal_timeout,
         base_frame               (str):                机器人本体坐标系（原地旋转时使用）
         angular_speed            (float):              原地旋转角速度（rad/s）
         yaw_tolerance            (float):              原地旋转角度容差（rad）
-        initial_pose_x           (float):              初始位置 X（米），用于首航点距离判断
-        initial_pose_y           (float):              初始位置 Y（米）
+        initial_pose_x           (float):              初始位置 X（米，地图坐标系），用于首航点距离判断
+        initial_pose_y           (float):              初始位置 Y（米，地图坐标系）
+        rotation_offset          (float):              导航坐标系相对地图坐标系的逆时针偏角（rad）
 
     返回:
         bool: 所有航点均成功到达时返回 True，否则返回 False
@@ -459,11 +520,17 @@ def navigate_to_waypoints(client, waypoints, map_frame, goal_timeout,
         name = wp.get('name', '未命名航点')
         rospy.loginfo('─' * 50)
         rospy.loginfo('正在前往第 %d/%d 个航点：%s', idx + 1, total, name)
-        rospy.loginfo('  目标坐标：x=%.4f  y=%.4f  yaw=%.4f rad',
+        rospy.loginfo('  目标坐标（导航坐标系）：x=%.4f  y=%.4f  yaw=%.4f rad',
                       wp['x'], wp['y'], wp['yaw'])
 
-        # 计算本航点与上一位置的 XY 距离
-        xy_dist = math.hypot(wp['x'] - prev_x, wp['y'] - prev_y)
+        # 将航点从导航坐标系变换到地图坐标系（move_base 使用地图坐标系）
+        wp_map = _transform_waypoint(wp, rotation_offset)
+        if rotation_offset != 0.0:
+            rospy.loginfo('  目标坐标（地图坐标系）：x=%.4f  y=%.4f  yaw=%.4f rad',
+                          wp_map['x'], wp_map['y'], wp_map['yaw'])
+
+        # 计算本航点（地图坐标系）与上一位置（地图坐标系）的 XY 距离
+        xy_dist = math.hypot(wp_map['x'] - prev_x, wp_map['y'] - prev_y)
 
         # 判断是否使用原地旋转（XY 几乎不变，仅角度变化）
         use_rotate = (xy_dist < rotate_in_place_threshold
@@ -474,7 +541,7 @@ def navigate_to_waypoints(client, waypoints, map_frame, goal_timeout,
             rospy.loginfo('  XY 距离 %.4f m < 阈值 %.4f m，使用原地旋转代替 move_base',
                           xy_dist, rotate_in_place_threshold)
             ok = _rotate_in_place(
-                wp['yaw'], cmd_vel_pub, tf_listener,
+                wp_map['yaw'], cmd_vel_pub, tf_listener,
                 map_frame, base_frame,
                 angular_speed=angular_speed,
                 yaw_tolerance=yaw_tolerance,
@@ -483,8 +550,8 @@ def navigate_to_waypoints(client, waypoints, map_frame, goal_timeout,
                 rospy.logwarn('✗ 航点 [%s] 原地旋转失败或超时。', name)
                 return False
         else:
-            # 构造并发送 move_base 目标
-            goal = build_goal(wp, map_frame)
+            # 构造并发送 move_base 目标（使用地图坐标系下的航点）
+            goal = build_goal(wp_map, map_frame)
             client.send_goal(goal)
 
             # 等待结果，设置超时
@@ -504,7 +571,7 @@ def navigate_to_waypoints(client, waypoints, map_frame, goal_timeout,
                 return False
 
         # 更新上一位置：优先从 TF 读取实际位置，确保旋转阈值判断准确。
-        # 若 TF 查询失败（定位丢失等异常情况），退化为使用目标坐标。
+        # 若 TF 查询失败（定位丢失等异常情况），退化为使用地图坐标系目标坐标。
         if tf_listener is not None:
             try:
                 (trans, _) = tf_listener.lookupTransform(
@@ -513,10 +580,10 @@ def navigate_to_waypoints(client, waypoints, map_frame, goal_timeout,
                 rospy.logdebug('实际到达位置（TF）：x=%.4f  y=%.4f', prev_x, prev_y)
             except (tf.LookupException, tf.ConnectivityException,
                     tf.ExtrapolationException):
-                rospy.logwarn('TF 查询失败，使用航点目标坐标作为上一位置。')
-                prev_x, prev_y = wp['x'], wp['y']
+                rospy.logwarn('TF 查询失败，使用航点目标坐标（地图坐标系）作为上一位置。')
+                prev_x, prev_y = wp_map['x'], wp_map['y']
         else:
-            prev_x, prev_y = wp['x'], wp['y']
+            prev_x, prev_y = wp_map['x'], wp_map['y']
 
         # 判断是否还有下一个航点，以及是否需要交互提示
         next_idx = idx + 1
@@ -567,6 +634,11 @@ def main():
     # 等待 AMCL 就绪的超时时间（解决导航终点偏差大/路径奇怪问题）
     amcl_wait_timeout = rospy.get_param('~amcl_wait_timeout', 30.0)
 
+    # 坐标系旋转偏差（解决地图角度偏差问题）
+    # 表示导航（用户）坐标系相对地图坐标系的逆时针旋转角（弧度）
+    # 例：地图偏差 45°（π/4 ≈ 0.7854），则设为 0.7854
+    map_rotation_offset = rospy.get_param('~map_rotation_offset', 0.0)
+
     rospy.loginfo('=' * 50)
     rospy.loginfo('多点导航节点已启动')
     rospy.loginfo('  航点数量    : %d', len(WAYPOINTS))
@@ -579,6 +651,9 @@ def main():
     rospy.loginfo('  交互控制    : %s', '开启' if interactive else '关闭')
     rospy.loginfo('  原地旋转阈值: %.3f m', rotate_threshold)
     rospy.loginfo('  AMCL 等待   : %.0f 秒', amcl_wait_timeout)
+    if map_rotation_offset != 0.0:
+        rospy.loginfo('  坐标旋转偏差: %.4f rad（%.2f°，导航坐标系相对地图逆时针偏转）',
+                      map_rotation_offset, math.degrees(map_rotation_offset))
     if set_initial_pose:
         rospy.loginfo('  初始位姿    : x=%.4f  y=%.4f  yaw=%.4f rad',
                       initial_pose_x, initial_pose_y, initial_pose_a)
@@ -654,7 +729,8 @@ def main():
             angular_speed=angular_speed,
             yaw_tolerance=yaw_tolerance,
             initial_pose_x=initial_pose_x,
-            initial_pose_y=initial_pose_y)
+            initial_pose_y=initial_pose_y,
+            rotation_offset=map_rotation_offset)
 
         if not success:
             rospy.logwarn('本轮导航未能完成所有航点，节点退出。')

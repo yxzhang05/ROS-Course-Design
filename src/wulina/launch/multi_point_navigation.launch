@@ -26,6 +26,8 @@
   <!--   initial_pose_y            — 初始位姿 Y 米                               -->
   <!--   initial_pose_a            — 初始偏航角 rad                              -->
   <!--   amcl_wait_timeout         — 等待 AMCL 就绪最长秒数（默认：30，≤0=跳过） -->
+  <!--   map_rotation_offset       — 导航坐标系相对地图坐标系的逆时针偏角（弧度，默认：0）-->
+  <!--                               例：地图偏差 45°，设为 0.7854（即 π/4）        -->
   <!-- ============================================================ -->
 
   <!-- ===================== -->
@@ -69,6 +71,10 @@
   <!-- 等待 AMCL 就绪的最长时间（秒），解决导航路径奇怪和终点偏差大的问题 -->
   <!-- 设为 ≤0 可跳过等待（仅在 AMCL 已确认就绪时使用）-->
   <arg name="amcl_wait_timeout" default="30.0"/>
+  <!-- 坐标系旋转偏差（弧度），解决地图角度偏差问题 -->
+  <!-- 表示导航坐标系相对地图坐标系的逆时针旋转角；0 = 两坐标系重合（默认） -->
+  <!-- 例：地图偏差 45°（逆时针），则设为 0.7854（π/4） -->
+  <arg name="map_rotation_offset" default="0.0"/>
 
   <!-- ===================== -->
   <!-- 3. 启动多点导航节点    -->
@@ -101,6 +107,8 @@
     <param name="initial_pose_a"   value="$(arg initial_pose_a)"/>
     <!-- AMCL 就绪等待参数 -->
     <param name="amcl_wait_timeout" value="$(arg amcl_wait_timeout)"/>
+    <!-- 坐标系旋转偏差（导航坐标系相对地图坐标系的逆时针偏角，弧度） -->
+    <param name="map_rotation_offset" value="$(arg map_rotation_offset)"/>
   </node>
 
 </launch>
