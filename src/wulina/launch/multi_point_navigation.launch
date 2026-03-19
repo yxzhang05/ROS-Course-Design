@@ -25,6 +25,7 @@
   <!--   initial_pose_x            — 初始位姿 X 米（set_initial_pose=true 时有效）-->
   <!--   initial_pose_y            — 初始位姿 Y 米                               -->
   <!--   initial_pose_a            — 初始偏航角 rad                              -->
+  <!--   amcl_wait_timeout         — 等待 AMCL 就绪最长秒数（默认：30，≤0=跳过） -->
   <!-- ============================================================ -->
 
   <!-- ===================== -->
@@ -65,6 +66,9 @@
   <arg name="initial_pose_x"   default="0.0"/>
   <arg name="initial_pose_y"   default="0.0"/>
   <arg name="initial_pose_a"   default="0.0"/>
+  <!-- 等待 AMCL 就绪的最长时间（秒），解决导航路径奇怪和终点偏差大的问题 -->
+  <!-- 设为 ≤0 可跳过等待（仅在 AMCL 已确认就绪时使用）-->
+  <arg name="amcl_wait_timeout" default="30.0"/>
 
   <!-- ===================== -->
   <!-- 3. 启动多点导航节点    -->
@@ -95,6 +99,8 @@
     <param name="initial_pose_x"   value="$(arg initial_pose_x)"/>
     <param name="initial_pose_y"   value="$(arg initial_pose_y)"/>
     <param name="initial_pose_a"   value="$(arg initial_pose_a)"/>
+    <!-- AMCL 就绪等待参数 -->
+    <param name="amcl_wait_timeout" value="$(arg amcl_wait_timeout)"/>
   </node>
 
 </launch>

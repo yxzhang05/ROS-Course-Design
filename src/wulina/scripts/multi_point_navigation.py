@@ -35,6 +35,23 @@
        并填写 initial_pose_x/y/a 参数，节点启动时会自动向 AMCL 发布初始
        位姿，省去手动标注步骤。
 
+【问题3】改变 XY（含或不含角度）时导航终点偏差大、路径奇怪
+  原因：
+    a) AMCL 尚未收敛。节点启动后 move_base 立即开始规划，若 AMCL 粒子
+       滤波此时还没有读到足够的激光数据完成收敛，机器人对自身在地图中的
+       位置估计是错误的，导致规划路径的起点偏离实际位置，最终停靠点也
+       随之偏移，路径也会显得"绕路"或"走错方向"。
+    b) prev_x/prev_y 使用目标坐标而非实际位置。每到达一个航点后，代码以
+       航点的目标坐标作为下一次距离比较的"上一位置"，若小车因里程计误差
+       实际停在略微不同的位置，累积偏差会影响后续旋转/移动决策。
+  解决方案：
+    a) 导航前等待 AMCL 就绪：新增 _wait_for_amcl() 函数，在节点启动后
+       以及发布初始位姿后，等待 /amcl_pose 话题发布至少一帧消息，确认
+       AMCL 粒子滤波已激活并完成初步定位后再开始导航。
+    b) 用 TF 实际位置更新 prev_x/prev_y：每个航点完成后，通过 TF 读取
+       机器人的真实位置（map→base_footprint），若 TF 查询失败则退化为
+       使用目标坐标，保证旋转阈值判断的准确性。
+
 参数说明（可通过 ROS 参数服务器或 launch 文件覆盖）：
   ~loop                      (bool,  默认: False) — 是否循环执行航点列表
   ~loop_count                (int,   默认: 1)     — 循环次数（loop=False 时忽略）；0=无限
@@ -49,6 +66,8 @@
   ~initial_pose_x            (float, 默认: 0.0)   — 初始位姿 X（米）
   ~initial_pose_y            (float, 默认: 0.0)   — 初始位姿 Y（米）
   ~initial_pose_a            (float, 默认: 0.0)   — 初始位姿偏航角（弧度）
+  ~amcl_wait_timeout         (float, 默认: 30.0)  — 等待 AMCL 就绪的最长时间（秒）；
+                                                     设为 ≤0 跳过等待
 """
 
 import math
@@ -236,6 +255,43 @@ def _publish_initial_pose(pub, x, y, yaw, map_frame):
                   x, y, yaw)
 
 
+def _wait_for_amcl(timeout=30.0):
+    """
+    等待 AMCL 发布第一个位姿估计消息，确保定位系统已就绪后再开始导航。
+
+    AMCL（自适应蒙特卡洛定位）在启动后需要读取初始的激光扫描数据并运行
+    粒子滤波，才能在地图中确定机器人的位置。若在 AMCL 收敛前就向 move_base
+    发送导航目标，规划器将从错误的起始位置出发，导致路径奇怪和终点偏差大。
+
+    本函数通过订阅 /amcl_pose 话题，等待 AMCL 发布至少一帧位姿消息。
+    这是最低限度的"AMCL 已激活"判据；若需要更高精度，请在 RViz 中目视
+    确认粒子云已收敛（粒子分布收紧到一个小区域）后再允许节点继续。
+
+    参数:
+        timeout (float): 最长等待时间（秒）；若 ≤ 0 则跳过等待直接返回 True
+
+    返回:
+        bool: AMCL 在超时时间内发布了位姿则返回 True，否则返回 False
+    """
+    if timeout <= 0.0:
+        rospy.loginfo('amcl_wait_timeout≤0，跳过 AMCL 就绪等待。')
+        return True
+
+    rospy.loginfo('正在等待 AMCL 定位就绪（最多 %.0f 秒）…', timeout)
+    try:
+        rospy.wait_for_message('/amcl_pose', PoseWithCovarianceStamped,
+                               timeout=timeout)
+        rospy.loginfo('✓ AMCL 定位已就绪，可以开始导航。')
+        return True
+    except rospy.ROSException:
+        rospy.logwarn(
+            '等待 AMCL 超时（%.0f 秒）。定位可能尚未收敛，导航精度可能受影响。\n'
+            '  建议：在 RViz 中使用"2D Pose Estimate"手动指定初始位姿，\n'
+            '  或将 set_initial_pose 设为 true 并配置 initial_pose_x/y/a。',
+            timeout)
+        return False
+
+
 # ------------------------------------------------------------------------------
 #  交互式终端控制
 # ------------------------------------------------------------------------------
@@ -258,8 +314,8 @@ def _read_float(prompt_text, default):
             sys.stdout.write('{} [默认 {:.4f}]: '.format(prompt_text, default))
             sys.stdout.flush()
             raw = input()
-        except EOFError:
-            sys.stdout.write('\n（检测到非交互式输入，使用默认值 {:.4f}）\n'.format(default))
+        except (EOFError, KeyboardInterrupt):
+            sys.stdout.write('\n（检测到非交互式输入或中断，使用默认值 {:.4f}）\n'.format(default))
             sys.stdout.flush()
             return default
 
@@ -447,8 +503,20 @@ def navigate_to_waypoints(client, waypoints, map_frame, goal_timeout,
                 rospy.logwarn('✗ 未能到达航点 [%s]，状态码：%d', name, state)
                 return False
 
-        # 更新上一位置
-        prev_x, prev_y = wp['x'], wp['y']
+        # 更新上一位置：优先从 TF 读取实际位置，确保旋转阈值判断准确。
+        # 若 TF 查询失败（定位丢失等异常情况），退化为使用目标坐标。
+        if tf_listener is not None:
+            try:
+                (trans, _) = tf_listener.lookupTransform(
+                    map_frame, base_frame, rospy.Time(0))
+                prev_x, prev_y = trans[0], trans[1]
+                rospy.logdebug('实际到达位置（TF）：x=%.4f  y=%.4f', prev_x, prev_y)
+            except (tf.LookupException, tf.ConnectivityException,
+                    tf.ExtrapolationException):
+                rospy.logwarn('TF 查询失败，使用航点目标坐标作为上一位置。')
+                prev_x, prev_y = wp['x'], wp['y']
+        else:
+            prev_x, prev_y = wp['x'], wp['y']
 
         # 判断是否还有下一个航点，以及是否需要交互提示
         next_idx = idx + 1
@@ -496,6 +564,9 @@ def main():
     initial_pose_y    = rospy.get_param('~initial_pose_y', 0.0)
     initial_pose_a    = rospy.get_param('~initial_pose_a', 0.0)
 
+    # 等待 AMCL 就绪的超时时间（解决导航终点偏差大/路径奇怪问题）
+    amcl_wait_timeout = rospy.get_param('~amcl_wait_timeout', 30.0)
+
     rospy.loginfo('=' * 50)
     rospy.loginfo('多点导航节点已启动')
     rospy.loginfo('  航点数量    : %d', len(WAYPOINTS))
@@ -507,6 +578,7 @@ def main():
     rospy.loginfo('  本体坐标系  : %s', base_frame)
     rospy.loginfo('  交互控制    : %s', '开启' if interactive else '关闭')
     rospy.loginfo('  原地旋转阈值: %.3f m', rotate_threshold)
+    rospy.loginfo('  AMCL 等待   : %.0f 秒', amcl_wait_timeout)
     if set_initial_pose:
         rospy.loginfo('  初始位姿    : x=%.4f  y=%.4f  yaw=%.4f rad',
                       initial_pose_x, initial_pose_y, initial_pose_a)
@@ -537,6 +609,13 @@ def main():
                               initial_pose_a, map_frame)
         # 给 AMCL 粒子滤波一点时间重新收敛
         rospy.sleep(1.0)
+
+    # ------------------------------------------------------------------
+    # 等待 AMCL 就绪（解决导航路径奇怪和终点偏差大的问题）
+    # 必须在 AMCL 完成初步定位后再启动导航，否则 move_base 会从错误的
+    # 起始位置进行规划，导致路径偏离和终点不准确。
+    # ------------------------------------------------------------------
+    _wait_for_amcl(timeout=amcl_wait_timeout)
 
     # ------------------------------------------------------------------
     # 创建 move_base 动作客户端并等待服务器就绪

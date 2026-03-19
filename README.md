@@ -17,6 +17,9 @@ src/
     │   └── multi_point_navigation.py   # 多点导航节点
     └── launch/
         └── multi_point_navigation.launch  # 一键启动多点导航
+
+docs/
+└── navigation_guide.md    # 导航原理与问题排查详细文档
 ```
 
 ---
@@ -69,6 +72,14 @@ roslaunch wulina multi_point_navigation.launch
 | `loop` | 是否循环巡逻 | `false` |
 | `loop_count` | 循环次数（`0` = 无限） | `1` |
 | `goal_timeout` | 单个目标超时（秒） | `60.0` |
+| `rotate_in_place_threshold` | XY 距离（米）小于此值时原地旋转 | `0.05` |
+| `angular_speed` | 原地旋转角速度（rad/s） | `0.3` |
+| `yaw_tolerance` | 原地旋转角度容差（rad） | `0.05` |
+| `set_initial_pose` | 启动时自动向 AMCL 发布初始位姿 | `false` |
+| `initial_pose_x` | 初始位姿 X（米，`set_initial_pose=true` 时有效） | `0.0` |
+| `initial_pose_y` | 初始位姿 Y（米） | `0.0` |
+| `initial_pose_a` | 初始偏航角（弧度） | `0.0` |
+| `amcl_wait_timeout` | 等待 AMCL 就绪的最长时间（秒），设为 `≤0` 跳过等待 | `30.0` |
 
 示例——循环巡逻（无限次）：
 
@@ -81,6 +92,13 @@ roslaunch wulina multi_point_navigation.launch loop:=true loop_count:=0
 ```bash
 roslaunch wulina multi_point_navigation.launch \
   map_file:=$(rospack find start_roscar)/map/roscar_map2.yaml
+```
+
+示例——指定初始位姿（机器人不在地图原点时）：
+
+```bash
+roslaunch wulina multi_point_navigation.launch \
+  set_initial_pose:=true initial_pose_x:=1.23 initial_pose_y:=0.45 initial_pose_a:=0.785
 ```
 
 ### 方式二：导航栈已运行时单独启动节点
@@ -131,3 +149,19 @@ roslaunch start_roscar navigation.launch
 # 5. 启动多点自动导航（wulina 包）
 roslaunch wulina multi_point_navigation.launch
 ```
+
+---
+
+## 导航原理与问题排查
+
+详细的导航系统架构说明、常见问题分析与解决方案，以及调参建议，请参阅：
+
+👉 **[docs/navigation_guide.md](docs/navigation_guide.md)**
+
+主要内容：
+- AMCL 定位原理及初始位姿的重要性
+- move_base 导航框架工作流程
+- 代价地图与路径规划器说明
+- 多点导航脚本执行逻辑详解
+- 三类已知问题的根因分析与解决方案
+- 调参建议与诊断命令速查
