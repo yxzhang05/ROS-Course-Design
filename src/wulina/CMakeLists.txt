@@ -13,6 +13,7 @@ catkin_package()
 catkin_install_python(PROGRAMS
   scripts/multi_point_navigation.py
   scripts/straight_line_nav.py
+  scripts/odom_navi.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
