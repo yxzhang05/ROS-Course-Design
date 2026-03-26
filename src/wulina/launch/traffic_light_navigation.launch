@@ -1,0 +1,142 @@
+<launch>
+  <!-- ============================================================ -->
+  <!-- wulina 红绿灯感知多点导航启动文件                              -->
+  <!--                                                              -->
+  <!-- 本文件在 multi_point_navigation.launch 基础上新增：           -->
+  <!--   • usb_cam 摄像头节点（发布 /usb_cam/image_raw）            -->
+  <!--   • traffic_light_yolov8_node（发布 /traffic_light_info）    -->
+  <!--                                                              -->
+  <!-- 导航节点会订阅 /traffic_light_info 和 /scan，当识别到红灯    -->
+  <!-- 且前方激光距离 ≤ tl_stop_distance（默认 1.0 m）时自动停车，  -->
+  <!-- 待绿灯出现后恢复导航。                                        -->
+  <!--                                                              -->
+  <!-- 使用方式：                                                    -->
+  <!--   roslaunch wulina traffic_light_navigation.launch           -->
+  <!--                                                              -->
+  <!-- 所有 multi_point_navigation.launch 的可选参数均可使用，      -->
+  <!-- 额外新增参数：                                                -->
+  <!--   tl_stop_distance — 红灯停车触发距离（米，默认 1.0）         -->
+  <!-- ============================================================ -->
+
+  <!-- ===================== -->
+  <!-- 1. 导航基础栈          -->
+  <!--    差速驱动 TEB 参数，  -->
+  <!--    与 multi_point_navigation.launch 完全一致                 -->
+  <!-- ===================== -->
+
+  <arg name="map_file" default="$(find start_roscar)/map/roscar_map1.yaml"/>
+
+  <!-- 1-a. 机器人底盘、TF、EKF、激光雷达 -->
+  <include file="$(find start_roscar)/launch/start_roscar.launch"/>
+
+  <!-- 1-b. 地图服务器 -->
+  <node pkg="map_server" type="map_server" name="map_server_roscar"
+        args="$(arg map_file)" output="screen"/>
+
+  <!-- 1-c. AMCL 定位 -->
+  <include file="$(find start_roscar)/launch/include/amcl.launch"/>
+
+  <!-- 1-d. move_base（差速驱动专用 TEB 参数） -->
+  <node pkg="move_base" type="move_base" name="move_base" output="screen">
+    <rosparam command="load"
+              file="$(find wulina)/param/straight_move_base_params.yaml"/>
+    <rosparam command="load"
+              file="$(find start_roscar)/param/global_costmap_params.yaml"/>
+    <rosparam command="load"
+              file="$(find start_roscar)/param/local_costmap_params.yaml"/>
+    <rosparam command="load"
+              file="$(find start_roscar)/param/costmap_common_params.yaml"/>
+    <rosparam command="load"
+              file="$(find start_roscar)/param/base_global_planner_param.yaml"/>
+    <rosparam command="load"
+              file="$(find wulina)/param/straight_teb_params.yaml"/>
+    <param name="transform_tolerance" value="1.0"/>
+    <param name="use_sim_time"        value="false"/>
+  </node>
+
+  <!-- ===================== -->
+  <!-- 2. 摄像头节点          -->
+  <!--    usb_cam 发布        -->
+  <!--    /usb_cam/image_raw  -->
+  <!--    请根据实际设备修改   -->
+  <!--    video_device 参数   -->
+  <!-- ===================== -->
+  <node pkg="usb_cam" type="usb_cam_node" name="usb_cam" output="screen">
+    <param name="video_device"   value="/dev/video0"/>
+    <param name="image_width"    value="640"/>
+    <param name="image_height"   value="480"/>
+    <param name="pixel_format"   value="yuyv"/>
+    <param name="camera_frame_id" value="usb_cam"/>
+    <param name="io_method"      value="mmap"/>
+  </node>
+
+  <!-- ===================== -->
+  <!-- 3. 红绿灯识别节点      -->
+  <!--    订阅 /usb_cam/image_raw  -->
+  <!--    发布 /traffic_light_info -->
+  <!--    格式："颜色,角度"       -->
+  <!-- ===================== -->
+  <!-- YOLOv8 模型文件路径，请修改为实际路径 -->
+  <arg name="model_path"
+       default="/home/gdut/catkin_roscar/src/traffic_light_yolo/best_new.pt"/>
+  <node pkg="traffic_light_yolo" type="traffic_light_yolov8_node.py"
+        name="traffic_light_yolov8_node" output="screen">
+    <param name="model_path" value="$(arg model_path)"/>
+  </node>
+
+  <!-- ===================== -->
+  <!-- 4. 多点导航节点参数    -->
+  <!-- ===================== -->
+  <arg name="loop"         default="false"/>
+  <arg name="loop_count"   default="1"/>
+  <arg name="goal_timeout" default="60.0"/>
+  <arg name="interactive"  default="true"/>
+
+  <arg name="rotate_in_place_threshold" default="0.05"/>
+  <arg name="angular_speed"             default="0.3"/>
+  <arg name="yaw_tolerance"             default="0.05"/>
+
+  <arg name="set_initial_pose" default="false"/>
+  <arg name="initial_pose_x"   default="0.0"/>
+  <arg name="initial_pose_y"   default="0.0"/>
+  <arg name="initial_pose_a"   default="0.0"/>
+  <arg name="amcl_wait_timeout" default="30.0"/>
+
+  <arg name="map_rotation_offset"       default="0.0"/>
+  <arg name="map_translation_offset_x" default="0.0"/>
+  <arg name="map_translation_offset_y" default="0.0"/>
+
+  <!-- 红灯停车触发距离（米）：前方激光 ≤ 此值且识别到红灯时停车 -->
+  <arg name="tl_stop_distance" default="1.0"/>
+
+  <!-- ===================== -->
+  <!-- 5. 启动多点导航节点    -->
+  <!-- ===================== -->
+  <node pkg="wulina" type="multi_point_navigation.py"
+        name="multi_point_navigation" output="screen">
+    <param name="loop"         value="$(arg loop)"/>
+    <param name="loop_count"   value="$(arg loop_count)"/>
+    <param name="goal_timeout" value="$(arg goal_timeout)"/>
+    <param name="interactive"  value="$(arg interactive)"/>
+    <param name="map_frame"    value="map"/>
+    <param name="base_frame"   value="base_footprint"/>
+
+    <param name="rotate_in_place_threshold" value="$(arg rotate_in_place_threshold)"/>
+    <param name="angular_speed"             value="$(arg angular_speed)"/>
+    <param name="yaw_tolerance"             value="$(arg yaw_tolerance)"/>
+
+    <param name="set_initial_pose" value="$(arg set_initial_pose)"/>
+    <param name="initial_pose_x"   value="$(arg initial_pose_x)"/>
+    <param name="initial_pose_y"   value="$(arg initial_pose_y)"/>
+    <param name="initial_pose_a"   value="$(arg initial_pose_a)"/>
+    <param name="amcl_wait_timeout" value="$(arg amcl_wait_timeout)"/>
+
+    <param name="map_rotation_offset"      value="$(arg map_rotation_offset)"/>
+    <param name="map_translation_offset_x" value="$(arg map_translation_offset_x)"/>
+    <param name="map_translation_offset_y" value="$(arg map_translation_offset_y)"/>
+
+    <!-- 红绿灯停车参数 -->
+    <param name="tl_stop_distance" value="$(arg tl_stop_distance)"/>
+  </node>
+
+</launch>

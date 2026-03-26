@@ -1,0 +1,77 @@
+<launch>
+  <!-- ============================================================ -->
+  <!-- odom_navi.launch — 纯里程计 PID 坐标导航启动文件             -->
+  <!--                                                              -->
+  <!-- 功能：                                                        -->
+  <!--   不依赖地图和激光雷达，以启动时的位置为坐标原点，            -->
+  <!--   根据用户在终端输入的 (x, y) 坐标，使用 PID 算法驱动         -->
+  <!--   三轮差速机器人移动到目标点。                                -->
+  <!--                                                              -->
+  <!-- 本文件启动：                                                  -->
+  <!--   1. 机器人底盘驱动（STM32 串口通信、里程计、IMU）            -->
+  <!--   2. 机器人模型与 TF 关系发布                                 -->
+  <!--   3. EKF 扩展卡尔曼滤波（融合里程计与 IMU）                  -->
+  <!--   4. odom_navi.py 纯里程计导航节点                           -->
+  <!--                                                              -->
+  <!-- 注意：本启动文件不启动 AMCL、move_base 和激光雷达。           -->
+  <!--                                                              -->
+  <!-- 使用方式：                                                    -->
+  <!--   roslaunch wulina odom_navi.launch                          -->
+  <!--                                                              -->
+  <!-- 可选命令行参数（key:=value 覆盖）：                           -->
+  <!--   car_mode         — 小车型号（默认 senior_diff）            -->
+  <!--   max_linear_vel   — 最大线速度 m/s（默认 0.10）             -->
+  <!--   max_angular_vel  — 最大角速度 rad/s（默认 1.00）           -->
+  <!--   dist_tolerance   — 到点距离容差 m（默认 0.05）             -->
+  <!--   angle_tolerance  — 旋转对准容差 rad（默认 0.05）           -->
+  <!--   lin_kp/ki/kd     — 线速度 PID 参数（默认 0.50/0.00/0.08） -->
+  <!--   ang_kp/ki/kd     — 角速度 PID 参数（默认 2.00/0.00/0.20） -->
+  <!--   use_imu_yaw      — 是否优先使用 IMU 偏航角（默认 true）    -->
+  <!--   heading_correct_threshold — 前进中朝向偏差触发重对准阈值   -->
+  <!--                               rad（默认 0.35）               -->
+  <!-- ============================================================ -->
+
+  <!-- ── 1. 小车型号参数 ────────────────────────────────────────── -->
+  <arg name="car_mode" default="senior_diff"/>
+
+  <!-- ── 2. 底盘驱动：STM32 串口 + 里程计 + IMU 发布 ────────────── -->
+  <include file="$(find start_roscar)/launch/start_roscar.launch">
+    <arg name="car_mode" value="$(arg car_mode)"/>
+  </include>
+
+  <!-- ── 3. 导航节点参数（可通过命令行覆盖）───────────────────────── -->
+  <arg name="max_linear_vel"            default="0.10"/>
+  <arg name="max_angular_vel"           default="1.00"/>
+  <arg name="dist_tolerance"            default="0.05"/>
+  <arg name="angle_tolerance"           default="0.05"/>
+  <arg name="use_imu_yaw"               default="true"/>
+  <arg name="heading_correct_threshold" default="0.35"/>
+
+  <!-- 线速度 PID -->
+  <arg name="lin_kp" default="0.50"/>
+  <arg name="lin_ki" default="0.00"/>
+  <arg name="lin_kd" default="0.08"/>
+
+  <!-- 角速度 PID -->
+  <arg name="ang_kp" default="2.00"/>
+  <arg name="ang_ki" default="0.00"/>
+  <arg name="ang_kd" default="0.20"/>
+
+  <!-- ── 4. 启动纯里程计导航节点 ────────────────────────────────── -->
+  <node pkg="wulina" type="odom_navi.py"
+        name="odom_navi" output="screen" launch-prefix="xterm -e">
+    <param name="max_linear_vel"            value="$(arg max_linear_vel)"/>
+    <param name="max_angular_vel"           value="$(arg max_angular_vel)"/>
+    <param name="dist_tolerance"            value="$(arg dist_tolerance)"/>
+    <param name="angle_tolerance"           value="$(arg angle_tolerance)"/>
+    <param name="use_imu_yaw"               value="$(arg use_imu_yaw)"/>
+    <param name="heading_correct_threshold" value="$(arg heading_correct_threshold)"/>
+    <param name="lin_kp"                    value="$(arg lin_kp)"/>
+    <param name="lin_ki"                    value="$(arg lin_ki)"/>
+    <param name="lin_kd"                    value="$(arg lin_kd)"/>
+    <param name="ang_kp"                    value="$(arg ang_kp)"/>
+    <param name="ang_ki"                    value="$(arg ang_ki)"/>
+    <param name="ang_kd"                    value="$(arg ang_kd)"/>
+  </node>
+
+</launch>

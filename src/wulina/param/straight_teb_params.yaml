@@ -1,0 +1,128 @@
+# TEB 局部规划器参数（直线导航专用版）
+# =====================================================================
+# 本文件是 start_roscar/param/teb_local_planner_params.yaml 的改进版本，
+# 专为"先原地转向、再直线前进"导航策略设计，具体改动如下：
+#
+#   1. min_turning_radius / wheelbase 均设为 0.0
+#      → 按差速驱动（差速底盘）模型处理，允许原地旋转；
+#        阿克曼约束已全部解除，消除 TEB 为满足转弯半径而规划倒退的根源。
+#
+#   2. max_vel_x_backwards: 0.0
+#      → 完全禁止后退运动。TEB 优化器将不会生成任何后向速度。
+#
+#   3. weight_kinematics_forward_drive: 100.0
+#      → 原值为 1；大幅提高前进优先权重，在不得不转向时也偏好用旋转替代倒退。
+#
+#   4. weight_shortest_path: 1.0
+#      → 原值为 0；TEB 在优化轨迹时会同时最小化路径长度，配合全局 Dijkstra
+#        规划得到并跟踪最短路径。
+#
+#   5. global_plan_overwrite_orientation: True
+#      → 原值为 False；TEB 会把全局路径上每个中间点的朝向修正为"面朝下一点"，
+#        从而使局部轨迹与直线全局路径保持一致。
+#
+# 其余参数与原始文件保持一致，便于对比排查。
+# =====================================================================
+
+TebLocalPlannerROS:
+  odom_topic: odom
+  map_frame: map
+
+  # ── 速度限制 ──────────────────────────────────────────────────────
+  max_vel_x: 0.15           # 最大前向速度 (m/s)
+  max_vel_y: 0.0            # 非全向底盘须为 0
+  max_vel_x_backwards: 0.0  # ★ 禁止后退（start_roscar 原始文件中为 0.15）
+  max_vel_theta: 1.5        # 最大旋转角速度 (rad/s)
+  acc_lim_x: 0.2            # 最大前向加速度 (m/s²)
+  acc_lim_y: 0.0            # 非全向底盘须为 0
+  acc_lim_theta: 0.3        # 最大角加速度 (rad/s²)
+
+  # ── 底盘运动学模型 ────────────────────────────────────────────────
+  # ★ 差速驱动模式：min_turning_radius 和 wheelbase 均设为 0.0
+  #   若底盘实为阿克曼，则在此处填写真实参数，并同时调高
+  #   weight_kinematics_turning_radius 以约束转弯半径。
+  min_turning_radius: 0.0   # ★ 差速底盘可原地旋转（start_roscar 原始文件中为 0.750）
+  wheelbase: 0.0            # ★ 差速底盘轴距设为 0（start_roscar 原始文件中为 0.322）
+  cmd_angle_instead_rotvel: False
+
+  # ── 机器人外形（与 costmap_common_params.yaml 保持一致）────────────
+  footprint_model:
+    type: polygon
+    vertices: [[-0.09, -0.185], [-0.09, 0.185], [0.4, 0.185], [0.4, -0.185]]
+
+  # ── 障碍物参数 ────────────────────────────────────────────────────
+  min_obstacle_dist: 0.1
+  include_costmap_obstacles: True
+  costmap_obstacles_behind_robot_dist: 1.5
+  obstacle_poses_affected: 15
+  costmap_converter_plugin: ""
+  costmap_converter_spin_thread: True
+  costmap_converter_rate: 5
+  include_dynamic_obstacles: True
+  dynamic_obstacle_inflation_dist: 0.6
+
+  # ── 目标容差 ──────────────────────────────────────────────────────
+  xy_goal_tolerance: 0.2
+  yaw_goal_tolerance: 0.1
+  free_goal_vel: False
+
+  # ── 轨迹配置 ──────────────────────────────────────────────────────
+  teb_autosize: True
+  dt_ref: 0.45
+  dt_hysteresis: 0.1
+  global_plan_overwrite_orientation: True  # ★ 覆盖全局路径朝向（start_roscar 原始文件中为 False）
+  max_global_plan_lookahead_dist: 3.0
+  feasibility_check_no_poses: 5
+
+  # ── 优化权重 ──────────────────────────────────────────────────────
+  no_inner_iterations: 5
+  no_outer_iterations: 4
+  optimization_activate: True
+  optimization_verbose: False
+  penalty_epsilon: 0.1
+  obstacle_cost_exponent: 4
+  weight_max_vel_x: 2
+  weight_max_vel_theta: 1
+  weight_acc_lim_x: 1
+  weight_acc_lim_theta: 1
+  weight_kinematics_nh: 1000
+  weight_kinematics_forward_drive: 100.0  # ★ 强制前进优先（start_roscar 原始文件中为 1）
+  weight_kinematics_turning_radius: 1
+  weight_optimaltime: 1                   # 必须大于 0
+  weight_shortest_path: 1.0              # ★ 优化路径长度（start_roscar 原始文件中为 0）
+  weight_obstacle: 100
+  weight_inflation: 0.2
+  weight_dynamic_obstacle: 10
+  weight_dynamic_obstacle_inflation: 0.2
+  weight_viapoint: 1
+  weight_adapt_factor: 2
+
+  # ── 并行拓扑规划 ──────────────────────────────────────────────────
+  enable_homotopy_class_planning: False
+  enable_multithreading: True
+  max_number_classes: 4
+  selection_cost_hysteresis: 1.0
+  selection_prefer_initial_plan: 0.95
+  selection_obst_cost_scale: 1.0
+  selection_alternative_time_cost: False
+  roadmap_graph_no_samples: 15
+  roadmap_graph_area_width: 5
+  roadmap_graph_area_length_scale: 1.0
+  h_signature_prescaler: 0.5
+  h_signature_threshold: 0.1
+  obstacle_heading_threshold: 0.45
+  switching_blocking_period: 0.0
+  viapoints_all_candidates: True
+  delete_detours_backwards: True
+  max_ratio_detours_duration_best_duration: 3.0
+  visualize_hc_graph: False
+  visualize_with_time_as_z_axis_scale: False
+
+  # ── 恢复行为 ──────────────────────────────────────────────────────
+  shrink_horizon_backup: True
+  shrink_horizon_min_duration: 10
+  oscillation_recovery: False
+  oscillation_v_eps: 0.1
+  oscillation_omega_eps: 0.1
+  oscillation_recovery_min_duration: 10
+  oscillation_filter_duration: 10
