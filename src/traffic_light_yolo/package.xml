@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>traffic_light_yolo</name>
+  <version>0.1.0</version>
+  <description>
+    基于 YOLOv8 的红绿灯识别 ROS 包。
+    识别结果以字符串格式 "颜色,角度" 发布到 /traffic_light_info 话题，
+    供 multi_point_navigation 节点在导航中实现红灯停车、绿灯通行。
+  </description>
+
+  <maintainer email="todo@todo.com">todo</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>rospy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>cv_bridge</depend>
+</package>

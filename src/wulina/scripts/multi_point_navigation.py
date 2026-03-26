@@ -97,6 +97,89 @@ import tf
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from geometry_msgs.msg import PoseWithCovarianceStamped, Quaternion, Twist
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
+from sensor_msgs.msg import LaserScan
+from std_msgs.msg import String
+import threading
+
+# ------------------------------------------------------------------------------
+#  红绿灯状态（由 /traffic_light_info 话题回调更新）
+# ------------------------------------------------------------------------------
+# 访问锁：ROS 话题回调在独立线程中运行，需用锁保护与主导航线程的共享数据
+_tl_lock = threading.Lock()
+# 当前识别到的信号灯颜色，取值为 'red' / 'green' / 'none'
+_tl_color = 'none'
+# 最近一次消息的 ROS 时间戳（用于判断消息是否过期）
+_tl_stamp = None
+
+# 最新一帧激光扫描消息（由 /scan 话题回调更新）
+_scan_lock = threading.Lock()
+_latest_scan = None
+
+
+def _tl_callback(msg):
+    """接收 /traffic_light_info 话题，格式为 "颜色,角度"，例如 "red,5.2"。"""
+    global _tl_color, _tl_stamp
+    parts = msg.data.split(',')
+    color = parts[0].strip() if len(parts) >= 1 else 'none'
+    stamp = rospy.Time.now()
+    with _tl_lock:
+        _tl_color = color
+        _tl_stamp = stamp
+
+
+def _scan_callback(msg):
+    """接收 /scan 激光扫描话题，缓存最新消息供前方障碍物距离判断使用。"""
+    global _latest_scan
+    with _scan_lock:
+        _latest_scan = msg
+
+
+def _tl_is_red(validity_timeout=2.0):
+    """
+    判断当前是否为有效的"红灯"状态。
+    若距最近一次 /traffic_light_info 消息超过 validity_timeout 秒，
+    则视为信号灯信息已过期，返回 False，避免因摄像头掉线而误停车。
+
+    参数:
+        validity_timeout (float): 消息有效期（秒），默认 2.0 s
+
+    返回:
+        bool: 当前信号灯为红灯且数据新鲜时返回 True，否则返回 False
+    """
+    with _tl_lock:
+        stamp = _tl_stamp
+        color = _tl_color
+    if stamp is None:
+        return False
+    if (rospy.Time.now() - stamp).to_sec() > validity_timeout:
+        return False
+    return color == 'red'
+
+
+def _obstacle_within(scan_msg, max_dist=1.0, angle_half=0.26):
+    """
+    检查激光扫描正前方 ±angle_half rad（默认 ±15°）扇形范围内，
+    是否存在距离不超过 max_dist 米的障碍物。
+
+    参数:
+        scan_msg   (LaserScan | None): 最新激光扫描消息；为 None 时返回 False
+        max_dist   (float):            停车触发距离（米），默认 1.0 m
+        angle_half (float):            前向检测半角（弧度），默认 0.26 rad ≈ 15°
+
+    返回:
+        bool: 扇形范围内有障碍物（距离 ≤ max_dist）时返回 True，否则返回 False
+    """
+    if scan_msg is None:
+        return False
+    angle_min = scan_msg.angle_min
+    angle_inc = scan_msg.angle_increment
+    for i, r in enumerate(scan_msg.ranges):
+        if not math.isfinite(r) or r <= 0.0:
+            continue
+        angle = angle_min + i * angle_inc
+        if abs(angle) <= angle_half and r <= max_dist:
+            return True
+    return False
 
 # ==============================================================================
 #  ★ 航点配置区域 ★
@@ -472,7 +555,8 @@ def navigate_to_waypoints(client, waypoints, map_frame, goal_timeout,
                            angular_speed=0.3, yaw_tolerance=0.05,
                            initial_pose_x=0.0, initial_pose_y=0.0,
                            rotation_offset=0.0,
-                           translation_x=0.0, translation_y=0.0):
+                           translation_x=0.0, translation_y=0.0,
+                           tl_stop_distance=1.0):
     """
     按顺序导航到航点列表中的每个目标点。
     当 interactive=True 时：
@@ -502,6 +586,9 @@ def navigate_to_waypoints(client, waypoints, map_frame, goal_timeout,
         rotation_offset          (float):              导航坐标系相对地图坐标系的逆时针偏角（rad）
         translation_x            (float):              旋转后叠加的 X 轴平移量（米，默认 0.0）
         translation_y            (float):              旋转后叠加的 Y 轴平移量（米，默认 0.0）
+        tl_stop_distance         (float):              红灯停车触发距离（米，默认 1.0 m）；
+                                                       当识别到红灯且前方激光距离 ≤ 此值时，
+                                                       暂停导航并等待绿灯后恢复。
 
     返回:
         bool: 所有航点均成功到达时返回 True，否则返回 False
@@ -569,21 +656,80 @@ def navigate_to_waypoints(client, waypoints, map_frame, goal_timeout,
             goal = build_goal(wp_map, map_frame)
             client.send_goal(goal)
 
-            # 等待结果，设置超时
-            finished = client.wait_for_result(rospy.Duration(goal_timeout))
+            # ── 红绿灯感知轮询等待循环 ──────────────────────────────────
+            # 使用轮询代替阻塞式 wait_for_result()，以便在行进中实时响应
+            # 红绿灯信号：
+            #   • 检测到红灯 + 前方激光 ≤ tl_stop_distance m → 取消目标，
+            #     持续发布零速使小车保持静止，直到绿灯或信号消失。
+            #   • 绿灯（或信号超期）→ 重新发送相同目标，重置超时计时器，
+            #     继续导航。
+            #   • 目标进入终止状态（SUCCEEDED/ABORTED/…）→ 退出循环。
+            #   • 累计等待超过 goal_timeout → 取消目标，导航失败。
+            # 注意：红灯等待期间不计入超时，超时仅从绿灯恢复后重新计算。
+            # ──────────────────────────────────────────────────────────
+            deadline = rospy.Time.now() + rospy.Duration(goal_timeout)
+            poll_rate = rospy.Rate(5)   # 轮询频率 5 Hz（每次间隔 0.2 s）
+            paused_by_tl = False        # 当前是否因红灯而暂停
+
+            _TERMINAL_STATES = {
+                actionlib.GoalStatus.SUCCEEDED,
+                actionlib.GoalStatus.ABORTED,
+                actionlib.GoalStatus.REJECTED,
+                actionlib.GoalStatus.PREEMPTED,
+                actionlib.GoalStatus.RECALLED,
+                actionlib.GoalStatus.LOST,
+            }
+
+            while not rospy.is_shutdown():
+                # 目标已进入终止状态，退出循环
+                if client.get_state() in _TERMINAL_STATES:
+                    break
+
+                # ── 红灯 + 前方有障碍 → 暂停 ────────────────────────
+                with _scan_lock:
+                    scan_snapshot = _latest_scan
+                if _tl_is_red() and _obstacle_within(
+                        scan_snapshot, max_dist=tl_stop_distance):
+                    if not paused_by_tl:
+                        rospy.logwarn(
+                            '🔴 检测到红灯且前方 %.1f m 内有障碍，'
+                            '暂停导航并等待绿灯（航点 [%s]）。',
+                            tl_stop_distance, name)
+                        client.cancel_goal()
+                        paused_by_tl = True
+                    # 持续发布零速，保持小车静止
+                    if cmd_vel_pub is not None:
+                        cmd_vel_pub.publish(Twist())
+                    poll_rate.sleep()
+                    continue
+
+                # ── 绿灯（或信号消失）→ 恢复导航 ───────────────────
+                if paused_by_tl:
+                    rospy.loginfo(
+                        '🟢 红灯已解除，重新发送导航目标，继续前往航点 [%s]。',
+                        name)
+                    client.send_goal(goal)
+                    paused_by_tl = False
+                    # 重置超时，红灯等待时间不计入 goal_timeout
+                    deadline = rospy.Time.now() + rospy.Duration(goal_timeout)
+
+                # ── 超时检查 ────────────────────────────────────────
+                if rospy.Time.now() >= deadline:
+                    rospy.logwarn('航点 [%s] 导航超时（%.1f 秒），取消当前目标。',
+                                  name, goal_timeout)
+                    client.cancel_goal()
+                    return False
+
+                poll_rate.sleep()
+
+            finished = (client.get_state() == actionlib.GoalStatus.SUCCEEDED)
 
             if not finished:
-                rospy.logwarn('航点 [%s] 导航超时（%.1f 秒），取消当前目标。',
-                              name, goal_timeout)
-                client.cancel_goal()
+                rospy.logwarn('✗ 未能到达航点 [%s]，状态码：%d',
+                              name, client.get_state())
                 return False
 
-            state = client.get_state()
-            if state == actionlib.GoalStatus.SUCCEEDED:
-                rospy.loginfo('✓ 成功到达航点 [%s]', name)
-            else:
-                rospy.logwarn('✗ 未能到达航点 [%s]，状态码：%d', name, state)
-                return False
+            rospy.loginfo('✓ 成功到达航点 [%s]', name)
 
         # 更新上一位置：优先从 TF 读取实际位置，确保旋转阈值判断准确。
         # 若 TF 查询失败（定位丢失等异常情况），退化为使用地图坐标系目标坐标。
@@ -664,6 +810,9 @@ def main():
     map_translation_offset_x = rospy.get_param('~map_translation_offset_x', 0.0)
     map_translation_offset_y = rospy.get_param('~map_translation_offset_y', 0.0)
 
+    # 红绿灯停车触发距离（米）：前方激光距离 ≤ 此值且识别到红灯时停车
+    tl_stop_distance = rospy.get_param('~tl_stop_distance', 1.0)
+
     rospy.loginfo('=' * 50)
     rospy.loginfo('多点导航节点已启动')
     rospy.loginfo('  航点数量    : %d', len(WAYPOINTS))
@@ -685,6 +834,8 @@ def main():
     if set_initial_pose:
         rospy.loginfo('  初始位姿    : x=%.4f  y=%.4f  yaw=%.4f rad',
                       initial_pose_x, initial_pose_y, initial_pose_a)
+    rospy.loginfo('  红灯停车距离: %.2f m（前方激光 ≤ 此值且红灯时停车）',
+                  tl_stop_distance)
     rospy.loginfo('=' * 50)
 
     # ------------------------------------------------------------------
@@ -699,6 +850,12 @@ def main():
     # ------------------------------------------------------------------
     cmd_vel_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=1)
     tf_listener = tf.TransformListener()
+
+    # ------------------------------------------------------------------
+    # 订阅红绿灯识别结果和激光扫描数据（用于红灯停车功能）
+    # ------------------------------------------------------------------
+    rospy.Subscriber('/traffic_light_info', String, _tl_callback, queue_size=1)
+    rospy.Subscriber('/scan', LaserScan, _scan_callback, queue_size=1)
 
     # ------------------------------------------------------------------
     # 向 AMCL 发布初始位姿估计（解决建图起点与导航起点不一致的问题）
@@ -760,7 +917,8 @@ def main():
             initial_pose_y=initial_pose_y,
             rotation_offset=map_rotation_offset,
             translation_x=map_translation_offset_x,
-            translation_y=map_translation_offset_y)
+            translation_y=map_translation_offset_y,
+            tl_stop_distance=tl_stop_distance)
 
         if not success:
             rospy.logwarn('本轮导航未能完成所有航点，节点退出。')
