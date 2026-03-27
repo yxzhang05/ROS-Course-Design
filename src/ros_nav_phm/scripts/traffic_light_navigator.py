@@ -59,6 +59,10 @@ class TrafficLightNavigator:
         # 参数
         self.detection_timeout = rospy.get_param("~detection_timeout", 5.0)
 
+        # 距离触发停车参数（来自 navigation_with_traffic_light.py 的精准测距逻辑）
+        self.stop_distance    = rospy.get_param("~stop_distance",    1.0)   # 目标停止距离（米）
+        self.action_threshold = rospy.get_param("~action_threshold", 1.5)   # 触发刹车的距离阈值（米）
+
         # 状态机
         self.state = STATE_NAVIGATING
         self.ready = False  # __init__ 成功完成后置 True
@@ -66,6 +70,7 @@ class TrafficLightNavigator:
         # 红绿灯检测
         self.last_detection_time = None
         self.light_state         = LIGHT_NONE
+        self.light_distance      = float('inf')   # 由检测节点测距后发布，单位：米
 
         # 红绿灯停止点配置（waypoint 索引列表）
         if not rospy.has_param("~traffic_light_stop_points"):
@@ -124,6 +129,8 @@ class TrafficLightNavigator:
             return
         self.last_detection_time = rospy.Time.now()
         self.light_state = int(msg.data[0])
+        if len(msg.data) >= 3:
+            self.light_distance = float(msg.data[2])
 
     def _set_state(self, new_state):
         if self.state == new_state:
@@ -192,7 +199,7 @@ class TrafficLightNavigator:
         if status == GoalStatus.SUCCEEDED:
             rospy.loginfo("Reached waypoint %d", self.wp_index - 1)
             reached_index = self.wp_index - 1
-            # 判断是否是红绿灯停止点
+            # 判断是否是红绿灯停止点（备用：waypoint 坐标触发）
             if reached_index in self.traffic_light_stop_points:
                 # 是停止点：不立即发下一个点，先检查灯态
                 self.is_at_traffic_light_stop = True
@@ -200,6 +207,9 @@ class TrafficLightNavigator:
             else:
                 # 不是停止点，直接发下一个点
                 self.pending_next = True
+        elif status == GoalStatus.PREEMPTED and self.state == STATE_WAITING_RED:
+            # 红灯停车时主动取消目标，不做重试，等绿灯后由 timer_cb 恢复
+            rospy.loginfo("Goal preempted for red light stop at waypoint %d.", self.wp_index - 1)
         else:
             self.retry_count += 1
             if self.retry_count <= self.max_retries:
@@ -226,8 +236,8 @@ class TrafficLightNavigator:
         if self.state == STATE_FINISHED:
             return
 
-        # 延迟发送下一个目标点（避免在 done_cb 里直接 send_goal 引发状态冲突）
-        if self.pending_next:
+        # 延迟发送下一个目标点（不在 WAITING_RED 时处理，避免跳过当前未完成的 waypoint）
+        if self.pending_next and self.state != STATE_WAITING_RED:
             self.pending_next = False
             self._send_next()
             return
@@ -242,26 +252,48 @@ class TrafficLightNavigator:
         is_red   = (light == LIGHT_RED)
         is_green = (light == LIGHT_GREEN)
 
+        # 距离是否在停车触发阈值以内（有效距离 + 小于 action_threshold）
+        within_stopping_distance = (self.light_distance != float('inf') and
+                                    self.light_distance < self.action_threshold)
+
         # 状态转换
         if self.state == STATE_NAVIGATING:
-            # 到达红绿灯停止点 → 检查灯态
+            # 【精准测距触发】红灯 + 距离 < action_threshold → 立即停车
+            if is_red and within_stopping_distance:
+                rospy.loginfo("RED light at %.2fm (< %.2fm threshold), stopping.",
+                              self.light_distance, self.action_threshold)
+                self._set_state(STATE_WAITING_RED)
+                # 取消当前 move_base 目标，防止导航超时自动重试
+                if self.goal_active:
+                    self.client.cancel_all_goals()
+                    self.goal_active = False
+                return
+
+            # 【备用：waypoint 坐标触发】到达预设停止点后检查灯态
             if self.is_at_traffic_light_stop:
                 if is_red:
-                    # 红灯 → 停车等待
                     self._set_state(STATE_WAITING_RED)
                 else:
-                    # 绿灯或无灯 → 直接发下一个点
                     rospy.loginfo("At stop point but light is green/none, continuing.")
                     self.is_at_traffic_light_stop = False
                     self.pending_next = True
 
         elif self.state == STATE_WAITING_RED:
             if is_green:
-                rospy.loginfo("GREEN — resuming.")
+                rospy.loginfo("GREEN — resuming navigation.")
                 self.is_at_traffic_light_stop = False
                 self._set_state(STATE_NAVIGATING)
-                # 发送下一个点
-                self.pending_next = True
+                # 恢复：重发当前 waypoint（被红灯中断时 current_wp 由 _send_next 保证已设置）
+                # 若 current_wp 为 None（异常情况），则退化为发下一个点
+                if self.current_wp is not None and not self.goal_active:
+                    self.retry_count = 0
+                    self._send_via_points(self.wp_index - 1)
+                    self.client.send_goal(self._make_goal(self.current_wp),
+                                          done_cb=self._done_cb)
+                    self.goal_active = True
+                    rospy.loginfo("Resuming waypoint %d after green light.", self.wp_index - 1)
+                else:
+                    self.pending_next = True
 
     # ----------------------------------------------------------
     # 启动

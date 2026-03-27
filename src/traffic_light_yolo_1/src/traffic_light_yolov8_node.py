@@ -59,9 +59,6 @@ class TrafficLightDetector:
         self.max_lost_frames = rospy.get_param("~max_lost_frames", 3)  # 允许连续丢失的最大帧数
         self.lost_count = 0  # 当前连续丢失计数
 
-        # 雷达采样窗口
-        self.scan_window_half = rospy.get_param("~scan_window_half", 5)  # 索引半宽
-
         # 时间同步
         self.max_time_diff = rospy.get_param("~max_time_diff", 0.1)  # 秒，图像与雷达最大允许时差
         self.last_image_stamp = None
@@ -100,11 +97,8 @@ class TrafficLightDetector:
     # ----------------------------------------------------------
     # 测距
     # ----------------------------------------------------------
-    def _calc_distance(self, angle_deg, angle_span_deg=0.0):
-        """用视觉角度查雷达，返回距离（m），无有效点返回 inf
-
-        angle_span_deg: bbox对应的角度跨度（度），用于扩大采样窗口
-        """
+    def _calc_distance(self, angle_deg):
+        """用视觉角度查雷达对应索引处的距离（单点精准测量），返回距离（m），无有效点返回 inf"""
         if self.scan is None:
             return float('inf')
         # 时间同步检查
@@ -118,37 +112,21 @@ class TrafficLightDetector:
         angle_rad = math.radians(angle_deg + self.angle_offset)
         n = len(scan.ranges)
 
-        # 基础索引（浮点）
-        idx_float = (angle_rad - scan.angle_min) / scan.angle_increment
+        # 计算对应索引
+        index = int((angle_rad - scan.angle_min) / scan.angle_increment)
+
         # 检查索引是否在有效范围内
-        if idx_float < 0 or idx_float >= n:
-            return float('inf')
-        idx_int = int(round(idx_float))
-
-        # 确定采样窗口半宽
-        # 1. 基于bbox角度跨度计算最小窗口
-        min_span_idx = 0
-        if angle_span_deg > 0.0:
-            angle_span_rad = math.radians(angle_span_deg)
-            min_span_idx = int(math.ceil(angle_span_rad / scan.angle_increment / 2.0))
-
-        # 2. 使用配置的窗口半宽，取两者较大值
-        half_width = max(self.scan_window_half, min_span_idx)
-
-        # 收集窗口内有效距离
-        valid = []
-        start = max(0, idx_int - half_width)
-        end   = min(n, idx_int + half_width + 1)
-        for i in range(start, end):
-            r = scan.ranges[i]
-            if scan.range_min < r < scan.range_max:
-                valid.append(r)
-
-        if not valid:
+        if index < 0 or index >= n:
             return float('inf')
 
-        # 使用最小值（红绿灯比背景更近，最小值能穿透背景干扰）
-        return min(valid)
+        distance = scan.ranges[index]
+
+        # 过滤无效值（包括 inf/nan 以及超出雷达量程的值）
+        if (math.isinf(distance) or math.isnan(distance) or
+                not (scan.range_min <= distance <= scan.range_max)):
+            return float('inf')
+
+        return distance
 
     # ----------------------------------------------------------
     # 距离滤波
@@ -244,17 +222,8 @@ class TrafficLightDetector:
                 self.filtered_angle = (self.angle_filter_alpha * raw_angle +
                                       (1.0 - self.angle_filter_alpha) * self.filtered_angle)
             angle = self.filtered_angle
-            # 计算bbox角度跨度（度）
-            if bbox_width > 0:
-                angle_span = bbox_width * self.camera_fov / self.image_width
-            else:
-                angle_span = 0.0
         else:
             angle = 0.0
-            angle_span = 0.0
-
-        # 保存当前帧的角度跨度，供测距使用
-        self.current_angle_span = angle_span
 
         # 去抖
         state_map = {"none": 0, "red": 1, "green": 2}
@@ -302,7 +271,7 @@ class TrafficLightDetector:
 
         # 测距（只在检测到灯时测）
         if self.confirmed_state != 0:
-            raw_distance = self._calc_distance(self.confirmed_angle, self.current_angle_span)
+            raw_distance = self._calc_distance(self.confirmed_angle)
             # 距离滤波：限幅跳变 + 滑动窗口中值
             distance = self._filter_distance(raw_distance)
         else:

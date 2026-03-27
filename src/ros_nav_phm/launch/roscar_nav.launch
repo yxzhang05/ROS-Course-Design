@@ -9,6 +9,9 @@
         name="traffic_light_navigator" output="screen">
     <param name="detection_timeout"  value="1.0"/>
     <param name="max_retries"        value="3"/>
+    <!-- 精准测距停车参数（来自 navigation_with_traffic_light.py） -->
+    <param name="stop_distance"      value="1.0"/>   <!-- 目标停车距离（米） -->
+    <param name="action_threshold"   value="1.5"/>   <!-- 触发停车的距离阈值（米），建议 stop_distance + 0.5 -->
     <rosparam file="$(find ros_nav_phm)/param/waypoints.yaml" command="load"/>
   </node>
 </launch>
