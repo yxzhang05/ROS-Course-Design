@@ -2,7 +2,7 @@
 
 ## 概述
 
-本次升级将 `navigation_with_traffic_light.py` 中的**单点精准测距算法**集成到原有的红绿灯导航系统中，替换了原来基于窗口采样取最小值的测距方法。同时，导航状态机新增了**基于实时距离的动态停车逻辑**，使小车能够在距交通灯约 1m 处精准停下，不再依赖预先设定的坐标停止点。
+本次升级将测距算法从**单点索引查找**改回经过增强的**窗口最小值策略**，并在灵敏度、角度跟踪、时间同步等方面全面优化。同时，导航状态机新增了**基于实时距离的动态停车逻辑**，使小车能够在距交通灯约 1m 处精准停下，不再依赖预先设定的坐标停止点。
 
 ---
 
@@ -10,29 +10,16 @@
 
 | 文件路径 | 改动内容 |
 |---|---|
-| `src/traffic_light_yolo_1/src/traffic_light_yolov8_node.py` | 替换 `_calc_distance` 方法为新的单点测距算法 |
+| `src/traffic_light_yolo_1/src/traffic_light_yolov8_node.py` | 重构 `_calc_distance` 为窗口最小值策略；新增置信度过滤；优化去抖/滤波参数 |
 | `src/ros_nav_phm/scripts/traffic_light_navigator.py` | 新增基于距离的动态停车逻辑；更新 `_detection_cb` 读取距离；修复 PREEMPTED 状态处理 |
 | `src/ros_nav_phm/launch/roscar_nav.launch` | 新增 `stop_distance`、`action_threshold` 参数 |
-| `src/traffic_light_yolo_1/param/detector_params.yaml` | 移除 `scan_window_half` 参数说明 |
+| `src/traffic_light_yolo_1/param/detector_params.yaml` | 新增 `scan_window_half`、`conf_threshold` 参数；更新所有参数默认值 |
 
 ---
 
 ## 二、测距算法对比
 
-### 旧算法（窗口采样取最小值）
-
-```python
-# 在目标角度 ± scan_window_half 范围内采样所有有效点
-valid = [scan.ranges[i] for i in range(start, end) if valid]
-return min(valid)  # 取最小值（假设交通灯比背景近）
-```
-
-**问题**：
-- 受 `scan_window_half` 参数影响大，窗口设置不当会包含旁边障碍物
-- 取最小值容易被路沿、铁丝网等近距离干扰物污染
-- 参数多（需要调 `scan_window_half`），不直观
-
-### 新算法（单点精准测距，来自 `navigation_with_traffic_light.py`）
+### 旧算法（单点索引查找）
 
 ```python
 # 将视觉角度直接换算为雷达数组索引，取该单个点的距离
@@ -41,12 +28,29 @@ index = int((angle_rad - scan.angle_min) / scan.angle_increment)
 distance = scan.ranges[index]
 ```
 
-**优势**：
-- 逻辑简洁清晰，直接对准交通灯所在角度
-- 不受旁边障碍物干扰
-- 参数少，只需校准 `camera_fov` 和 `angle_offset` 即可
+**问题**：
+- 单点命中率低：角度计算误差、雷达分辨率限制导致该点常返回 inf 或反射失效值
+- 无容错机制：单点无效直接丢弃本帧测距，距离输出频繁出现 inf
+- 对 `camera_fov` / `angle_offset` 标定精度要求极高
 
-**注意**：新算法对角度映射精度要求更高，必须准确标定 `camera_fov` 和 `angle_offset`，否则单点可能偏离目标（旧算法的宽窗口有一定容错性）。
+### 当前算法（窗口最小值策略）
+
+```python
+# 在目标角度 ± scan_window_half 个索引范围内，取所有有效点的最小值
+center = int((angle_rad - scan.angle_min) / scan.angle_increment)
+start = max(0, center - self.scan_window_half)
+end   = min(n, center + self.scan_window_half + 1)
+valid = [scan.ranges[i] for i in range(start, end)
+         if scan.range_min <= scan.ranges[i] <= scan.range_max]
+return min(valid)  # 窗口内最近障碍物即为灯体/灯杆本身
+```
+
+**优势**：
+- 取最小值而非中值：灯体是方向上最近的实体，最小值直接命中目标，精度优于中值
+- 窗口容错：单点失效时邻近点自动兜底，大幅减少 inf 输出
+- `scan_window_half` 可调（默认5），平衡精度与容错
+
+**注意**：窗口不宜过大（> 10），否则会把灯旁边的墙壁/柱子也纳入，导致取最小值偏小。
 
 ---
 
@@ -82,7 +86,7 @@ WAITING_RED 状态:
 
 ### 4.1 参数校准（重要！）
 
-新算法精度直接依赖两个参数的准确性：
+测距精度直接依赖两个参数的准确性：
 
 **① `camera_fov`（摄像头水平视场角）**
 
@@ -102,9 +106,9 @@ rosrun camera_calibration cameracalibrator.py \
 校准步骤：
 1. 将小车对准交通灯，使交通灯出现在画面正中间
 2. 启动检测节点：`rosrun traffic_light_yolo_1 traffic_light_yolov8_node.py`
-3. 查看终端输出的距离值，与卷尺测量值对比
+3. 查看终端输出的 `Angle` 和 `Distance` 字段，与卷尺测量值对比
 4. 在 `detector_params.yaml` 中调整 `angle_offset`：
-   - 测量值偏大（测到了旁边更远的背景）→ 调整 `angle_offset` 直到测到正确距离
+   - 测量距离偏大（雷达打到了背景）→ 调大/调小 `angle_offset` 直到指向灯体
    - 每次调整后重启节点验证
 
 修改参数文件位置：

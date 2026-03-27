@@ -135,9 +135,7 @@ class TrafficLightDetector:
         end   = min(n, center + self.scan_window_half + 1)
         valid = [
             scan.ranges[i] for i in range(start, end)
-            if not math.isinf(scan.ranges[i])
-            and not math.isnan(scan.ranges[i])
-            and scan.range_min <= scan.ranges[i] <= scan.range_max
+            if scan.range_min <= scan.ranges[i] <= scan.range_max
         ]
         if not valid:
             return float('inf')
