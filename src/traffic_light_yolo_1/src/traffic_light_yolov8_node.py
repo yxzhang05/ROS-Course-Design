@@ -35,9 +35,12 @@ class TrafficLightDetector:
         # 摄像头与雷达安装偏角补偿（度），实测后调整
         self.angle_offset = rospy.get_param("~angle_offset", 0.0)
 
+        # YOLO 置信度过滤阈值（低于此值的检测框忽略，减少噪声帧污染去抖历史）
+        self.conf_threshold = rospy.get_param("~conf_threshold", 0.45)
+
         # 去抖参数
-        debounce_window         = rospy.get_param("~debounce_window",    10)
-        self.debounce_threshold = rospy.get_param("~debounce_threshold", 8)
+        debounce_window         = rospy.get_param("~debounce_window",    5)
+        self.debounce_threshold = rospy.get_param("~debounce_threshold", 3)
         self.raw_history        = collections.deque(maxlen=debounce_window)
 
         # 确认后的灯态
@@ -45,23 +48,26 @@ class TrafficLightDetector:
         self.confirmed_angle = 0.0  # 度
 
         # 角度低通滤波
-        self.angle_filter_alpha = rospy.get_param("~angle_filter_alpha", 0.3)  # 新权重，越小越平滑
+        self.angle_filter_alpha = rospy.get_param("~angle_filter_alpha", 0.5)  # 新权重，越大响应越快
         self.filtered_angle = 0.0
         self.angle_filter_initialized = False
 
         # 距离滤波
-        self.distance_window_size = rospy.get_param("~distance_window_size", 5)
+        self.distance_window_size = rospy.get_param("~distance_window_size", 7)
         self.distance_history = collections.deque(maxlen=self.distance_window_size)
-        self.max_distance_jump = rospy.get_param("~max_distance_jump", 1)  # 米，相邻帧最大允许跳变
+        self.max_distance_jump = rospy.get_param("~max_distance_jump", 0.8)  # 米，相邻帧最大允许跳变
         self.last_filtered_distance = None  # 上一帧真实输出值，用于跳变限幅
 
         # 检测丢失缓冲
-        self.max_lost_frames = rospy.get_param("~max_lost_frames", 3)  # 允许连续丢失的最大帧数
+        self.max_lost_frames = rospy.get_param("~max_lost_frames", 5)  # 允许连续丢失的最大帧数
         self.lost_count = 0  # 当前连续丢失计数
 
         # 时间同步
-        self.max_time_diff = rospy.get_param("~max_time_diff", 0.1)  # 秒，图像与雷达最大允许时差
+        self.max_time_diff = rospy.get_param("~max_time_diff", 0.3)  # 秒，图像与雷达最大允许时差
         self.last_image_stamp = None
+
+        # 测距窗口：以角度对应索引为中心，取 ±scan_window_half 范围内最小有效距离
+        self.scan_window_half = rospy.get_param("~scan_window_half", 5)
 
         # 雷达
         self.scan = None
@@ -86,7 +92,8 @@ class TrafficLightDetector:
         # 距离打印计时
         self.last_print_time = time.time()
 
-        rospy.loginfo("Traffic light detection node started.")
+        rospy.loginfo("Traffic light detection node started. conf_thr=%.2f debounce=%d/%d scan_win=±%d",
+                      self.conf_threshold, self.debounce_threshold, debounce_window, self.scan_window_half)
 
     # ----------------------------------------------------------
     # 回调：雷达
@@ -98,7 +105,13 @@ class TrafficLightDetector:
     # 测距
     # ----------------------------------------------------------
     def _calc_distance(self, angle_deg):
-        """用视觉角度查雷达对应索引处的距离（单点精准测量），返回距离（m），无有效点返回 inf"""
+        """在角度对应索引 ±scan_window_half 的窗口内，取所有有效点的最小值作为距离。
+
+        原理：雷达打到灯体/灯杆的最近射线即为目标真实距离；
+              窗口采样比单点鲁棒，可应对单点 inf/反射失效；
+              取最小值而非中值，因窗口内最近障碍物就是红绿灯本体。
+        无有效点时返回 inf。
+        """
         if self.scan is None:
             return float('inf')
         # 时间同步检查
@@ -112,21 +125,25 @@ class TrafficLightDetector:
         angle_rad = math.radians(angle_deg + self.angle_offset)
         n = len(scan.ranges)
 
-        # 计算对应索引
-        index = int((angle_rad - scan.angle_min) / scan.angle_increment)
-
-        # 检查索引是否在有效范围内
-        if index < 0 or index >= n:
+        # 计算中心索引
+        center = int((angle_rad - scan.angle_min) / scan.angle_increment)
+        if center < 0 or center >= n:
             return float('inf')
 
-        distance = scan.ranges[index]
-
-        # 过滤无效值（包括 inf/nan 以及超出雷达量程的值）
-        if (math.isinf(distance) or math.isnan(distance) or
-                not (scan.range_min <= distance <= scan.range_max)):
+        # 收集窗口内有效点
+        start = max(0, center - self.scan_window_half)
+        end   = min(n, center + self.scan_window_half + 1)
+        valid = [
+            scan.ranges[i] for i in range(start, end)
+            if not math.isinf(scan.ranges[i])
+            and not math.isnan(scan.ranges[i])
+            and scan.range_min <= scan.ranges[i] <= scan.range_max
+        ]
+        if not valid:
             return float('inf')
 
-        return distance
+        # 取最小值：窗口内最近障碍物即为红绿灯本体
+        return min(valid)
 
     # ----------------------------------------------------------
     # 距离滤波
@@ -179,20 +196,22 @@ class TrafficLightDetector:
     # 检测
     # ----------------------------------------------------------
     def detect_light(self, results):
-        """返回置信度最高的红/绿灯框 (label, cx, width)，未检测到返回 ("none", -1, -1)"""
+        """返回置信度最高的红/绿灯框 (label, cx, width, conf)。
+        低于 conf_threshold 的框直接忽略，避免弱检测污染去抖历史。
+        未检测到返回 ("none", -1, -1, 0.0)。"""
         if len(results[0].boxes) == 0:
-            return "none", -1.0, -1.0
+            return "none", -1.0, -1.0, 0.0
         names = results[0].names
         boxes = results[0].boxes
-        best_label, best_cx, best_w, best_conf = "none", -1.0, -1.0, -1.0
+        best_label, best_cx, best_w, best_conf = "none", -1.0, -1.0, 0.0
         for i, cls in enumerate(boxes.cls):
             name = names[int(cls)]
             if name in ("red", "green"):
                 conf = float(boxes.conf[i])
-                if conf > best_conf:
+                if conf >= self.conf_threshold and conf > best_conf:
                     box = boxes.xywh[i]
                     best_label, best_cx, best_w, best_conf = name, float(box[0]), float(box[2]), conf
-        return best_label, best_cx, best_w
+        return best_label, best_cx, best_w, best_conf
 
     # ----------------------------------------------------------
     # 图像回调
@@ -209,7 +228,7 @@ class TrafficLightDetector:
 
         # 推理
         results = self.model(frame, verbose=False, device=0)
-        result_label, cx, bbox_width = self.detect_light(results)
+        result_label, cx, bbox_width, det_conf = self.detect_light(results)
 
         # 角度（ROS坐标系：左正右负）
         if cx >= 0:
@@ -288,12 +307,13 @@ class TrafficLightDetector:
         label_map = {0: "none", 1: "red", 2: "green"}
         self.file.write(label_map[self.confirmed_state] + "\n")
 
-        # 每秒打印一次灯态+距离
+        # 每秒打印一次灯态 + 角度 + 距离 + FPS
         now = time.time()
         if now - self.last_print_time >= 1.0:
-            dist_str = "{:.2f} m".format(distance) if distance != float('inf') else "inf"
-            rospy.loginfo("Light: %-5s  Distance: %s  FPS: %.1f",
-                          label_map[self.confirmed_state], dist_str,
+            dist_str  = "{:.2f} m".format(distance) if distance != float('inf') else "inf"
+            angle_str = "{:.1f}°".format(self.confirmed_angle) if self.confirmed_state != 0 else "--"
+            rospy.loginfo("Light: %-5s  Angle: %6s  Distance: %s  FPS: %.1f",
+                          label_map[self.confirmed_state], angle_str, dist_str,
                           self.frame_count / (now - self.start_time))
             self.last_print_time = now
 
