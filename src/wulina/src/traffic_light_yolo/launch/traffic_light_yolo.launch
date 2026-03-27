@@ -1,0 +1,7 @@
+<launch>
+    <node pkg="wulina" type="traffic_light_yolov8_node.py" name="traffic_light_yolo" output="screen">
+        <env name="LD_PRELOAD" value="/lib/aarch64-linux-gnu/libgomp.so.1"/>
+        <env name="LD_BIND_NOW" value="1"/>
+    </node>
+    
+</launch>

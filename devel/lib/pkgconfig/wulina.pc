@@ -1,0 +1,8 @@
+prefix=/home/gdut/catkin_roscar/devel
+
+Name: wulina
+Description: Description of wulina
+Version: 0.0.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 

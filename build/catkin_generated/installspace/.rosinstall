@@ -1,0 +1,2 @@
+- setup-file:
+    local-name: /home/gdut/catkin_roscar/install/setup.sh

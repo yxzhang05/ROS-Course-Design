@@ -1,0 +1,26 @@
+<launch>
+  <!--
+    YOLO红绿灯检测节点启动文件
+    使用说明：
+    1. 所有可调参数在 param/detector_params.yaml 中配置
+    2. 修改 detector_params.yaml 后重启节点即可生效，无需重新编译
+    3. 模型路径使用py文件中的默认值 "best.pt"
+    4. 启动命令：roslaunch traffic_light_yolo traffic_light_yolo.launch
+  -->
+
+  <node pkg="traffic_light_yolo_1" type="traffic_light_yolov8_node.py"
+        name="traffic_light_detector" output="screen" respawn="false">
+
+    <!-- 加载所有可调参数配置文件 -->
+    <rosparam file="$(find traffic_light_yolo_1)/param/detector_params.yaml" command="load"/>
+
+    <!-- 可选：覆盖detector_params.yaml中的特定参数 -->
+    <!-- <param name="angle_offset" value="5.0"/> -->
+    <!-- <param name="camera_fov" value="93.4"/> -->
+
+    <!-- 环境变量设置（用于Jetson Nano） -->
+    <env name="LD_PRELOAD" value="/usr/lib/aarch64-linux-gnu/libgomp.so.1"/>
+
+  </node>
+
+</launch>

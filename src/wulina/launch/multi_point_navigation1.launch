@@ -1,0 +1,99 @@
+<launch>
+  <!-- ==================================================================== -->
+  <!-- wulina 智能多点导航系统启动文件                                      -->
+  <!--                                                                    -->
+  <!-- 本文件为完整系统启动，会依次启动：                                   -->
+  <!--   1. 机器人基础导航栈（底盘、雷达、地图、AMCL、move_base）         -->
+  <!--   2. 智能多点导航节点（支持外部暂停/恢复控制）                     -->
+  <!--                                                                    -->
+  <!-- 使用说明：                                                         -->
+  <!--   1. 确保已在另一个终端启动了交通灯识别和决策节点。                -->
+  <!--   2. 运行本文件：                                                  -->
+  <!--      roslaunch wulina multi_point_navigation1.launch               -->
+  <!--                                                                    -->
+  <!-- 参数说明与原 multi_point_navigation.launch 文件保持一致。           -->
+  <!-- ==================================================================== -->
+  
+  <!-- ===================== -->
+  <!-- 1. 导航基础栈           -->
+  <!--    复用 start_roscar 包中已有的 navigation.launch            -->
+  <!--    该文件会启动：底盘驱动、TF、EKF、激光雷达、地图、AMCL、    -->
+  <!--    move_base（全局规划 + TEB 局部规划）                       -->
+  <!-- ===================== -->
+  <!-- 地图文件，默认使用已建好的 roscar_map3.yaml -->
+  <arg name="map_file" default="$(find start_roscar)/map/roscar_map3.yaml"/>
+  <include file="$(find start_roscar)/launch/navigation.launch">
+    <arg name="map_file" value="$(arg map_file)"/>
+  </include>
+
+  <!-- ===================== -->
+  <!-- 2. 多点导航节点参数    -->
+  <!--    (这部分参数完全兼容，无需修改)    -->
+  <!-- ===================== -->
+  <!-- 是否循环执行所有航点（true = 循环，false = 执行一轮后退出） -->
+  <arg name="loop"         default="false"/>
+  <!-- 循环次数（仅 loop=true 时有效；0 表示无限循环） -->
+  <arg name="loop_count"   default="1"/>
+  <!-- 单个目标的最长等待时间（秒） -->
+  <arg name="goal_timeout" default="60.0"/>
+  <!-- 是否启用交互式终端控制（到达每个航点后提示是否继续或修改下一点坐标） -->
+  <arg name="interactive"  default="true"/>
+
+  <!-- 原地旋转参数（解决同位置旋转时 XY 漂移问题）-->
+  <!-- 相邻航点 XY 距离（米）小于此值时，改用 /cmd_vel 原地旋转代替 move_base -->
+  <arg name="rotate_in_place_threshold" default="0.05"/>
+  <!-- 原地旋转角速度（rad/s） -->
+  <arg name="angular_speed"             default="0.3"/>
+  <!-- 原地旋转角度容差（rad），误差小于此值即视为到位 -->
+  <arg name="yaw_tolerance"             default="0.05"/>
+
+  <!-- 初始位姿参数（解决 AMCL 初始位姿与建图起点不一致问题）-->
+  <!-- 若每次都在固定非原点位置出发，将 set_initial_pose 设为 true 并填写以下坐标 -->
+  <arg name="set_initial_pose" default="false"/>
+  <arg name="initial_pose_x"   default="0.0"/>
+  <arg name="initial_pose_y"   default="0.0"/>
+  <arg name="initial_pose_a"   default="0.0"/>
+  <!-- 等待 AMCL 就绪的最长时间（秒），解决导航路径奇怪和终点偏差大的问题 -->
+  <!-- 设为 ≤0 可跳过等待（仅在 AMCL 已确认就绪时使用）-->
+  <arg name="amcl_wait_timeout" default="30.0"/>
+  <!-- 坐标系旋转偏差（弧度），解决地图角度偏差问题 -->
+  <!-- 表示导航坐标系相对地图坐标系的逆时针旋转角；0 = 两坐标系重合（默认） -->
+  <!-- 例：地图偏差 45°（逆时针），则设为 0.7854（π/4） -->
+  <arg name="map_rotation_offset" default="0.0"/>
+
+  <!-- ============================================= -->
+  <!-- 3. 启动【智能】多点导航节点                     -->
+  <!--    脚本路径：wulina/scripts/multi_point_navigation1.py (假设您已重命名) -->
+  <!-- ============================================= -->
+  <node pkg="wulina" type="multi_point_navigation1.py"
+        name="multi_point_navigation1" output="screen">
+    <!-- 是否循环导航 -->
+    <param name="loop"         value="$(arg loop)"/>
+    <!-- 循环次数 -->
+    <param name="loop_count"   value="$(arg loop_count)"/>
+    <!-- 单目标超时（秒） -->
+    <param name="goal_timeout" value="$(arg goal_timeout)"/>
+    <!-- 是否启用交互式终端控制 -->
+    <param name="interactive"  value="$(arg interactive)"/>
+    <!-- 导航坐标系（与建图时使用的 map frame 保持一致） -->
+    <param name="map_frame"    value="map"/>
+    <!-- 机器人本体坐标系（原地旋转时读取当前朝向使用） -->
+    <param name="base_frame"   value="base_footprint"/>
+
+    <!-- 原地旋转参数 -->
+    <param name="rotate_in_place_threshold" value="$(arg rotate_in_place_threshold)"/>
+    <param name="angular_speed"             value="$(arg angular_speed)"/>
+    <param name="yaw_tolerance"             value="$(arg yaw_tolerance)"/>
+
+    <!-- 初始位姿参数 -->
+    <param name="set_initial_pose" value="$(arg set_initial_pose)"/>
+    <param name="initial_pose_x"   value="$(arg initial_pose_x)"/>
+    <param name="initial_pose_y"   value="$(arg initial_pose_y)"/>
+    <param name="initial_pose_a"   value="$(arg initial_pose_a)"/>
+    <!-- AMCL 就绪等待参数 -->
+    <param name="amcl_wait_timeout" value="$(arg amcl_wait_timeout)"/>
+    <!-- 坐标系旋转偏差（导航坐标系相对地图坐标系的逆时针偏角，弧度） -->
+    <param name="map_rotation_offset" value="$(arg map_rotation_offset)"/>
+  </node>
+
+</launch>

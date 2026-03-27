@@ -1,0 +1,8 @@
+prefix=/home/gdut/catkin_roscar/devel
+
+Name: rplidar_ros
+Description: Description of rplidar_ros
+Version: 1.10.0
+Cflags: -I/home/gdut/catkin_roscar/devel/include
+Libs: -L${prefix}/lib 
+Requires: 

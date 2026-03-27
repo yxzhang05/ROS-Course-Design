@@ -1,0 +1,17 @@
+<launch>
+  <!-- 速度代理节点 -->
+  <node pkg="ros_nav_phm" type="cmd_vel_filter.py"
+        name="cmd_vel_filter" output="screen">
+  </node>
+
+  <!-- 多点导航 + 红绿灯状态机节点 -->
+  <node pkg="ros_nav_phm" type="traffic_light_navigator.py"
+        name="traffic_light_navigator" output="screen">
+    <param name="detection_timeout"  value="1.0"/>
+    <param name="max_retries"        value="3"/>
+    <rosparam file="$(find ros_nav_phm)/param/waypoints.yaml" command="load"/>
+  </node>
+</launch>
+
+
+

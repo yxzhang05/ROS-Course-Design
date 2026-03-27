@@ -1,0 +1,39 @@
+<launch>
+  <!-- ===================== -->
+  <!-- 1. 启动机器人底层 -->
+  <!-- ===================== -->
+  <include file="$(find start_roscar)/launch/start_roscar.launch" />
+
+  <!-- ===================== -->
+  <!-- 3. 地图服务器 -->
+  <!-- ===================== -->
+  <arg name="map_file" default="$(find start_roscar)/map/roscar_map_2.yaml"/>
+  <node pkg="map_server" type="map_server" name="map_server_roscar" args="$(arg map_file)" output="screen"/>
+
+  <!-- ===================== -->
+  <!-- 4. AMCL 定位 -->
+  <!-- ===================== -->
+  <include file="$(find start_roscar)/launch/include/amcl.launch" />
+
+  <!-- ===================== -->
+  <!-- 5. move_base + Navigation -->
+  <!-- ===================== -->
+  <node pkg="move_base" type="move_base" name="move_base" output="screen">
+    <!-- 全局参数 -->
+    <rosparam command="load" file="$(find start_roscar)/param/move_base_params.yaml"/>
+    <!-- 全局 costmap -->
+    <rosparam command="load" file="$(find start_roscar)/param/global_costmap_params.yaml"/>
+    <!-- 局部 costmap -->
+    <rosparam command="load" file="$(find start_roscar)/param/local_costmap_params.yaml"/>
+    <!-- costmap 通用参数 -->
+    <rosparam command="load" file="$(find start_roscar)/param/costmap_common_params.yaml"/>
+    <!-- Global Planner 参数 -->
+    <rosparam command="load" file="$(find start_roscar)/param/base_global_planner_param.yaml"/>
+    <!-- TEB Local Planner 参数 -->
+    <rosparam command="load" file="$(find start_roscar)/param/teb_local_planner_params.yaml"/>
+    <!-- TF 容忍时间 -->
+    <param name="transform_tolerance" value="1.0"/>
+    <param name="use_sim_time" value="false"/>
+  </node>
+
+</launch>

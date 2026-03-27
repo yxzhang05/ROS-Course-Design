@@ -1,0 +1,30 @@
+<launch>
+  <!-- 选择 cartographer 时不开启 EKF -->
+  <arg name="is_cartographer" default="false"/>
+
+  <!-- Robot pose ekf 扩展卡尔曼滤波 -->
+  <node pkg="robot_pose_ekf"
+        type="robot_pose_ekf"
+        name="robot_pose_ekf"
+        output="screen"
+        unless="$(arg is_cartographer)">
+
+    <!-- ===== EKF 频率与超时 ===== -->
+    <param name="freq" value="30.0"/>
+    <param name="sensor_timeout" value="2.0"/>
+
+    <!-- ===== 使用哪些传感器 ===== -->
+    <param name="odom_used" value="true"/>
+    <param name="imu_used" value="true"/>
+    <param name="vo_used" value="false"/>
+
+    <!-- ===== TF / 坐标系设置（关键） ===== -->
+    <param name="odom_frame" value="odom"/>
+    <param name="base_footprint_frame" value="base_footprint"/>
+    <param name="output_frame" value="odom_combined"/>
+
+    <!-- ===== 话题重映射 ===== -->
+    <remap from="imu_data" to="imu"/>
+
+  </node>
+</launch>

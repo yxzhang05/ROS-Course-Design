@@ -1,0 +1,11 @@
+<launch>
+    <!-- 启动 driver_node 节点 -->
+    <node pkg="driver" type="driver_node" name="car_driver" output="screen">
+        <!-- 节点参数，可根据你 driver_pkg_node 代码调整 -->
+        <param name="usart_port_name" value="/dev/car_driver_tty"/>
+        <param name="serial_baud_rate" value="115200"/>
+        <!-- 底盘订阅安全速度话题，由cmd_vel_filter节点输出 -->
+        <!--remap from="/cmd_vel" to="/cmd_vel_safe"/-->
+    </node>
+</launch>
+

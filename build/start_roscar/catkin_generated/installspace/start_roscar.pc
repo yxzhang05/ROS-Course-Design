@@ -1,0 +1,8 @@
+prefix=/home/gdut/catkin_roscar/install
+
+Name: start_roscar
+Description: Description of start_roscar
+Version: 0.0.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 

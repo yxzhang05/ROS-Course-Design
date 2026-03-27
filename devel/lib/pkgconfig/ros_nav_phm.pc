@@ -1,0 +1,8 @@
+prefix=/home/gdut/catkin_roscar/devel
+
+Name: ros_nav_phm
+Description: Description of ros_nav_phm
+Version: 0.0.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 
